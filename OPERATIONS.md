@@ -149,3 +149,51 @@ todo-flow --state STATE hooks
 Cleanup is explicit and preserves branches. It requires a finished execution, a clean worktree and confirmed remote inclusion for a land endpoint; unlanded candidates are preserved. Migration copies the legacy SQL store into new file state; it is not an importer for another tool's ledger.
 
 Internal hooks are durable events, including document registration, execution acceptance, worker claims, work results, verification, effect confirmation, decision answers, controls, claim recovery, watch changes, triage and completion. A filesystem redo journal and durable agenda preserve handoffs. External callback hooks are not currently provided.
+
+## Local extension: manually supervised Orca result import
+
+`python -m todo_flow.manual_orca` is a **local extension**, not an upstream `todo-flow` command. Use it when the configured worker cannot safely run the bounded read-only review. It never starts `Engine` or `trackrun`, and it leaves the configured worker command unchanged. `prepare` first creates and claims one TODO work request through the file-backed `Store`; Main then runs the actual Orca policy dispatch. The task stays active until Main binds completed runtime evidence and imports the outputs.
+
+Run `prepare` only after source snapshots and skill files are frozen. It validates both manifests and backs up the TODO state before changing it:
+
+```sh
+TODO_REPO="/Users/dongchanyoon/Documents/Work/Projects/55.todo-flow"
+TODO_STATE="/Users/dongchanyoon/Library/Application Support/dongchanyoon/vault-writer/c8c2a400ae9d128235ed947208995fa3ae55201ed9718c53dc733b2c42814df3/todo-flow"
+STATE_PARENT="/Users/dongchanyoon/Library/Application Support/dongchanyoon/vault-writer/c8c2a400ae9d128235ed947208995fa3ae55201ed9718c53dc733b2c42814df3"
+ARTIFACT_DIR="/Users/dongchanyoon/.codex/artifacts/knowledge-flow-repair-20260926"
+
+PYTHONPATH="$TODO_REPO/src" python3 -m todo_flow.manual_orca prepare \
+  --state "$TODO_STATE" \
+  --track knowledge-flow-independent-validation \
+  --purpose "Fresh source-to-draft validation from frozen source and skill manifests" \
+  --contract "$ARTIFACT_DIR/fresh-trial-contract.md" \
+  --source-manifest "$ARTIFACT_DIR/fresh-source-manifest.json" \
+  --skill-manifest "$ARTIFACT_DIR/fresh-skill-manifest.json" \
+  --backup "$STATE_PARENT/todo-flow.pre-manual-orca-20260926"
+```
+
+Save `request_path` and `request_sha256` from the JSON output. Before dispatch, Main includes the exact `request_id`, `task_id`, `attempt_id`, request hash, contract hash, source-manifest hash and skill-manifest hash in the Orca startup prompt. The worker reads the supplied fresh source snapshots and frozen skill sources, stages all four outputs under `ARTIFACT_DIR`, and writes only worker-authored facts in `fresh-run.json`; it must not guess or include a final Orca record hash.
+
+After the exact Orca runtime exits successfully, Main supplies its global-dispatch record. `bind-completion` verifies the real `orca-global-dispatch/v2` and `orca-provider-bridge/v1` record, startup prompt hash, `orca-interactive/v1` status, successful process exit, official dispatch/session/chain completion and report hash. It then appends a separate `parent_completion` object to `fresh-run.json`, binds that object to the unchanged `worker_authored` section hash, and writes `todo-manual-result.json`. No send receipt is required for the startup-bound provider path; this extension does not invent `DELIVERED` evidence.
+
+```sh
+REQUEST_PATH="<request_path printed by prepare>"
+ORCA_RUN_RECORD="<exact completed global-dispatch record path from Main>"
+
+PYTHONPATH="$TODO_REPO/src" python3 -m todo_flow.manual_orca bind-completion \
+  --state "$TODO_STATE" \
+  --request "$REQUEST_PATH" \
+  --record "$ORCA_RUN_RECORD" \
+  --result "$ARTIFACT_DIR/todo-manual-result.json"
+
+PYTHONPATH="$TODO_REPO/src" python3 -m todo_flow.manual_orca import-result \
+  --state "$TODO_STATE" \
+  --request "$REQUEST_PATH" \
+  --result "$ARTIFACT_DIR/todo-manual-result.json"
+
+todo-flow --state "$TODO_STATE" status
+```
+
+`import-result` rechecks current request, source and skill hashes, all staged output hashes, source-claim bindings, helper evidence and unchanged second assessment. It completes the claimed work task and pauses the track in one `Store` transaction. Any mismatched binding, incomplete runtime, vault path, changed source, unsupported worker effect or stale report hash fails closed and leaves the task uncompleted.
+
+This importer accepts only results bound to the prepared TODO request and verified Orca records. A completed native run without that request binding and Orca evidence cannot be imported or attached retroactively as a TODO completion. Preserve out-of-band evidence by revising the paused track document through `Store.register` with the expected revision, then pause the track again because registration resets its control to idle. Leave unmet track conditions and TODO task/result records unchanged.

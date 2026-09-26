@@ -213,6 +213,72 @@ class Store:
             self.event(c, "execution.accepted", track, {"requestId": request})
         return {"requestId": request, "existing": False}
 
+    def manual_claim(self, track, purpose, owner, ttl=21600, binding=None):
+        """Create and claim one explicitly supervised manual-worker task.
+
+        This is used by the local Orca handoff extension. It does not start Engine,
+        create a worktree, or run the configured worker command.
+        """
+        if not purpose.strip() or not owner.strip() or ttl < 1:
+            raise ValueError("Manual task requires purpose, owner, and positive lease")
+        with self.transaction() as c:
+            current = self.track(track, c)
+            if current["status"] == "done":
+                raise Conflict("Track is complete; revise the document for new scope")
+            if current["control"] not in ("paused", "cancelled"):
+                raise Conflict("Manual task requires a paused or cancelled track")
+            pending = c.execute(
+                "SELECT 1 FROM tasks WHERE track=? AND status IN ('queued','running','waiting')",
+                (track,),
+            ).fetchone()
+            if pending:
+                raise Conflict("Track already has pending work")
+            if binding:
+                duplicate = c.execute("SELECT 1 FROM tasks WHERE dedup=?", (binding,)).fetchone()
+                if duplicate:
+                    raise Conflict("This source/skill binding already has a manual task")
+
+            request = uid("request")
+            c.execute(
+                "UPDATE tracks SET request=?,control='active',updated=? WHERE id=?",
+                (request, time.time(), track),
+            )
+            self.event(c, "execution.accepted", track, {"requestId": request, "manual": True})
+            task_id = self.enqueue(
+                c,
+                track,
+                "work",
+                purpose,
+                binding or f"{track}:{request}:manual",
+            )
+            row = c.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+            generation = row["generation"] + 1
+            attempt = uid("attempt")
+            now = time.time()
+            c.execute(
+                "UPDATE tasks SET status='running',owner=?,lease=?,generation=?,input_revision=?,"
+                "attempts=attempts+1,updated=? WHERE id=?",
+                (owner, now + ttl, generation, current["revision"], now, task_id),
+            )
+            c.execute(
+                "INSERT INTO attempts(id,task,generation,status,started) VALUES(?,?,?,?,?)",
+                (attempt, task_id, generation, "running", now),
+            )
+            self.event(
+                c,
+                "worker.claimed",
+                track,
+                {"attemptId": attempt, "workId": task_id, "owner": owner, "kind": "work"},
+            )
+            return {
+                **dict(row),
+                "generation": generation,
+                "attempt": attempt,
+                "input_revision": current["revision"],
+                "owner": owner,
+                "request_id": request,
+            }
+
     def control(self, track, action):
         if action not in ("pause", "resume", "cancel"):
             raise ValueError("Expected pause/resume/cancel")
