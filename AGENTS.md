@@ -8,7 +8,7 @@
 - `tests/`: unittest store, real local Git integration, HTTP, adapter and large-list projection tests.
 - `scripts/`: reproducible public GitHub acceptance tests and labeled local dashboard fixtures.
 - `assets/metrics/`: anonymous aggregate measurements, methodology, and generated public charts. Keep raw source histories and identifying metadata outside this repository.
-- `docs/`: local-only design specifications, prototypes, experiment records, and operating notes; ignored by Git and excluded from distributions. The local operating guide `운영가이드.md` and its comics live at the repository root, kept Git-excluded via `.git/info/exclude`; `docs/` entries symlink to them for compatibility. The public package must work without these local files. Preserve them and do not force-add them.
+- `docs/`: local-only design specifications, prototypes, experiment records, and operating notes; ignored by Git and excluded from distributions. The operating guide `운영가이드.md`, its `운영가이드.d/` detail documents, comics, and companion records are tracked at the repository root and published; `docs/` holds compatibility symlinks to them for local use only. The public package must work without `docs/` files. Preserve ignored local files and do not force-add them.
 - `README.md`, `README.ko.md`, `AGENT_INSTALL.md`, `OPERATIONS.md`, `UPDATES.md`, `DEMO.md`, `CHANGELOG.md`, `CONTRIBUTING.md`: tracked usage, change history, and contributor guidance. Shared instructions must work without `docs/`.
 
 ## Commands
