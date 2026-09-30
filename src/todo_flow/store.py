@@ -56,6 +56,9 @@ class Store:
         return config
 
     def configure(self, value):
+        from .release import check_config
+
+        check_config(value)
         with self.transaction() as c:
             if c.execute("SELECT 1 FROM config").fetchone():
                 raise Conflict(
@@ -156,7 +159,7 @@ class Store:
             self.event(c, "document.registered", doc["id"], {"revision": rev})
         return {"id": doc["id"], "revision": rev}
 
-    def enqueue(self, c, track, kind, purpose, key):
+    def enqueue(self, c, track, kind, purpose, key, *, parent=None):
         if kind not in (
             "assess",
             "work",
@@ -168,6 +171,37 @@ class Store:
             "watch",
         ):
             raise ValueError("Unknown task kind: " + kind)
+        source = {}
+        obligation_head = obligation_revision = None
+        followup = parent is not None and kind in ("assess", "work")
+        if parent is not None:
+            t = self.track(track, c)
+            source = {
+                "parentWorkId": parent["id"],
+                "parentAttemptId": parent["attempt"],
+                "requestKey": key,
+                "head": t["head"],
+                "documentRevision": t["revision"],
+            }
+            if followup:
+                # Enrollment is immutable; claim-time input_revision is a separate fence.
+                obligation_head, obligation_revision = t["head"], t["revision"]
+        if followup and obligation_head:
+            pending = c.execute(
+                "SELECT id FROM tasks WHERE track=? AND kind=? AND purpose=? "
+                "AND obligation_head=? AND obligation_revision=? "
+                "AND status IN ('queued','running','waiting') AND id<>? "
+                "ORDER BY created LIMIT 1",
+                (track, kind, purpose, obligation_head, obligation_revision, parent["id"]),
+            ).fetchone()
+            if pending:
+                self.event(
+                    c,
+                    "work.joined",
+                    track,
+                    {"workId": pending[0], "kind": kind, "purpose": purpose, **source},
+                )
+                return pending[0]
         if kind in ("review", "land", "triage", "complete", "verify"):
             pending = c.execute(
                 "SELECT id FROM tasks WHERE track=? AND kind=? AND status IN ('queued','running','waiting') ORDER BY created LIMIT 1",
@@ -178,17 +212,35 @@ class Store:
                     c,
                     "work.joined",
                     track,
-                    {"workId": pending[0], "kind": kind, "purpose": purpose},
+                    {"workId": pending[0], "kind": kind, "purpose": purpose, **source},
                 )
                 return pending[0]
         id_ = uid("work")
+        # A parent's old key is provenance, not evidence that a done obligation is met.
+        dedup = fingerprint([key, id_]) if followup else key
         c.execute(
-            "INSERT OR IGNORE INTO tasks(id,track,kind,purpose,dedup,created,updated) "
-            "VALUES(?,?,?,?,?,?,?)",
-            (id_, track, kind, purpose, key, time.time(), time.time()),
+            "INSERT OR IGNORE INTO tasks"
+            "(id,track,kind,purpose,dedup,created,updated,obligation_head,obligation_revision) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            (
+                id_,
+                track,
+                kind,
+                purpose,
+                dedup,
+                time.time(),
+                time.time(),
+                obligation_head,
+                obligation_revision,
+            ),
         )
-        row = c.execute("SELECT id FROM tasks WHERE dedup=?", (key,)).fetchone()
-        self.event(c, "work.requested", track, {"workId": row[0], "kind": kind, "purpose": purpose})
+        row = c.execute("SELECT id FROM tasks WHERE dedup=?", (dedup,)).fetchone()
+        self.event(
+            c,
+            "work.requested",
+            track,
+            {"workId": row[0], "kind": kind, "purpose": purpose, **source},
+        )
         return row[0]
 
     def start(self, track, request=None):
@@ -213,72 +265,6 @@ class Store:
             self.event(c, "execution.accepted", track, {"requestId": request})
         return {"requestId": request, "existing": False}
 
-    def manual_claim(self, track, purpose, owner, ttl=21600, binding=None):
-        """Create and claim one explicitly supervised manual-worker task.
-
-        This is used by the local Orca handoff extension. It does not start Engine,
-        create a worktree, or run the configured worker command.
-        """
-        if not purpose.strip() or not owner.strip() or ttl < 1:
-            raise ValueError("Manual task requires purpose, owner, and positive lease")
-        with self.transaction() as c:
-            current = self.track(track, c)
-            if current["status"] == "done":
-                raise Conflict("Track is complete; revise the document for new scope")
-            if current["control"] not in ("paused", "cancelled"):
-                raise Conflict("Manual task requires a paused or cancelled track")
-            pending = c.execute(
-                "SELECT 1 FROM tasks WHERE track=? AND status IN ('queued','running','waiting')",
-                (track,),
-            ).fetchone()
-            if pending:
-                raise Conflict("Track already has pending work")
-            if binding:
-                duplicate = c.execute("SELECT 1 FROM tasks WHERE dedup=?", (binding,)).fetchone()
-                if duplicate:
-                    raise Conflict("This source/skill binding already has a manual task")
-
-            request = uid("request")
-            c.execute(
-                "UPDATE tracks SET request=?,control='active',updated=? WHERE id=?",
-                (request, time.time(), track),
-            )
-            self.event(c, "execution.accepted", track, {"requestId": request, "manual": True})
-            task_id = self.enqueue(
-                c,
-                track,
-                "work",
-                purpose,
-                binding or f"{track}:{request}:manual",
-            )
-            row = c.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
-            generation = row["generation"] + 1
-            attempt = uid("attempt")
-            now = time.time()
-            c.execute(
-                "UPDATE tasks SET status='running',owner=?,lease=?,generation=?,input_revision=?,"
-                "attempts=attempts+1,updated=? WHERE id=?",
-                (owner, now + ttl, generation, current["revision"], now, task_id),
-            )
-            c.execute(
-                "INSERT INTO attempts(id,task,generation,status,started) VALUES(?,?,?,?,?)",
-                (attempt, task_id, generation, "running", now),
-            )
-            self.event(
-                c,
-                "worker.claimed",
-                track,
-                {"attemptId": attempt, "workId": task_id, "owner": owner, "kind": "work"},
-            )
-            return {
-                **dict(row),
-                "generation": generation,
-                "attempt": attempt,
-                "input_revision": current["revision"],
-                "owner": owner,
-                "request_id": request,
-            }
-
     def control(self, track, action):
         if action not in ("pause", "resume", "cancel"):
             raise ValueError("Expected pause/resume/cancel")
@@ -300,6 +286,9 @@ class Store:
                 "UPDATE tracks SET control=?,updated=? WHERE id=?", (state, time.time(), track)
             )
             if action == "cancel":
+                from .cancel_execution import record_requests
+
+                record_requests(self, c, track)
                 c.execute(
                     "UPDATE tasks SET status='cancelled',generation=generation+1,updated=? "
                     "WHERE track=? AND status IN ('queued','waiting','running')",
@@ -308,8 +297,12 @@ class Store:
             self.event(c, "execution.control", track, {"action": action, "control": state})
         return state
 
-    def claim(self, owner, ttl=45):
-        with self.transaction() as c:
+    def claim(self, owner, ttl=45, *, connection=None):
+        with (
+            contextlib.nullcontext(connection)
+            if connection is not None
+            else self.transaction() as c
+        ):
             # One mutable checkout per track. Different tracks can proceed concurrently.
             row = c.execute(
                 "SELECT w.* FROM tasks w JOIN tracks t ON t.id=w.track "
@@ -425,7 +418,9 @@ class Store:
             else:
                 for next_ in result.get("next", []):
                     key = fingerprint([task["id"], next_["kind"], next_["purpose"]])
-                    self.enqueue(c, task["track"], next_["kind"], next_["purpose"], key)
+                    self.enqueue(
+                        c, task["track"], next_["kind"], next_["purpose"], key, parent=task
+                    )
             self.event(
                 c,
                 "work.result",
@@ -453,10 +448,14 @@ class Store:
                 "UPDATE tasks SET status='done' WHERE id=? AND status='waiting'", (d["task"],)
             )
             kind = c.execute("SELECT kind FROM tasks WHERE id=?", (d["task"],)).fetchone()[0]
+            repair = json.loads(t["landing"]) if t["landing"] else {}
+            resume_kind = "triage" if kind == "triage" else "assess"
+            if repair.get("status") == "integration-repair":
+                resume_kind = "work"
             self.enqueue(
                 c,
                 d["track"],
-                "triage" if kind == "triage" else "assess",
+                resume_kind,
                 "Continue using decision answer: " + answer,
                 id_,
             )

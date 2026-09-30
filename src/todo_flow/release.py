@@ -9,8 +9,52 @@ try:
     VERSION = version("todo-flow")
 except PackageNotFoundError:
     # Copied recovery runners execute with the base interpreter.
-    VERSION = "0.0.1"
+    VERSION = "0.0.8"
 CONTRACTS = json.loads(Path(__file__).with_name("release.json").read_text())
+VERIFICATION_IDENTITY_VERSION = 1
+
+
+def validate_verify_identity(config):
+    """Validate declarations without observing files or environment values.
+
+    Keep this contract in the standalone release module: copied update recovery
+    runners must validate configuration without importing the installed engine.
+    Absence supports legacy configuration, not identity-free success evidence.
+    """
+    if "verify_identity" not in config:
+        return {
+            "version": VERIFICATION_IDENTITY_VERSION,
+            "files": [],
+            "environment": [],
+            "nonce": "",
+        }
+    declaration = config["verify_identity"]
+    if not isinstance(declaration, dict):
+        raise ValueError("verify_identity must be an object")
+    if set(declaration) - {"version", "files", "environment", "nonce"}:
+        raise ValueError("Unknown verify_identity fields")
+    if (
+        type(declaration.get("version")) is not int
+        or declaration["version"] != VERIFICATION_IDENTITY_VERSION
+    ):
+        raise ValueError("Unsupported verification identity configuration version")
+    result = {"version": VERIFICATION_IDENTITY_VERSION}
+    for field in ("files", "environment"):
+        values = declaration.get(field, [])
+        if not isinstance(values, list) or any(
+            not isinstance(value, str) or not value or "\0" in value for value in values
+        ):
+            raise ValueError(f"verify_identity.{field} must contain nonempty strings")
+        if len(set(values)) != len(values):
+            raise ValueError(f"Duplicate verify_identity.{field} entries")
+        result[field] = sorted(values)
+    if any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) for name in result["environment"]):
+        raise ValueError("Invalid verification environment variable name")
+    nonce = declaration.get("nonce", "")
+    if not isinstance(nonce, str):
+        raise ValueError("verify_identity.nonce must be a string")
+    result["nonce"] = nonce
+    return result
 
 
 def release_number(value):
@@ -45,6 +89,10 @@ def check_config(config, contracts=CONTRACTS, engine_version=VERSION):
             raise ValueError(f"Unsupported project {key}: {config.get(key)}")
     if release_number(engine_version) < release_number(config.get("min_engine_version", "0.0.1")):
         raise ValueError("Project requires a newer engine")
+    validate_verify_identity(config)
+    timeout = config.get("worker_timeout")
+    if timeout is not None and (type(timeout) is not int or timeout < 0):
+        raise ValueError("worker_timeout must be null (unlimited) or nonnegative seconds")
 
 
 def project_compatibility(state, contracts=CONTRACTS, engine_version=VERSION):

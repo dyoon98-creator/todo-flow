@@ -2,19 +2,103 @@
 
 User-visible behavior, compatibility, important fixes and repository changes. The first public release is `0.0.1`, distributed through GitHub Releases.
 
-## Unreleased
+## 0.0.8 — 2026-09-30
+
+- Group Activity by track with current work, assignment and decision waits, recent verification results, and bounded task details. Preserve full instructions, evidence links and selection across Korean/English switching and reloads; mark stale or disconnected observations as needing confirmation.
+- Merge clearly identical pending assess/work obligations only for the same track, candidate, document revision, task kind and exact purpose. Preserve each parent request atomically, including interrupted writes and cache reconstruction; completed tasks are not reused as new fulfillment evidence.
+- Support bounded `replace-v1` text proposals with exact base/file checks and durable application recovery, while preserving unrelated edits and legacy whole-file proposals.
+- Retain original verification stdout/stderr as separate artifacts with bounded reads and explicit missing, partial and completed states. Keep log evidence available through recovery and dashboard detail views.
+- Keep state/configuration formats and worker/skill protocols unchanged.
+
+## 0.0.7 — 2026-09-28
+
+- Remove the default 600-second worker deadline across native and compatibility workers and their supervisors. Explicit project limits remain supported; JSON `null` selects unlimited execution.
+- Register native worker activity in the owning Orca worktree's sidebar through a host-side status bridge. Verify the actual pane projection and retain its receipt without enabling model hooks or treating UI state as completion evidence.
+- Check native worker claims while waiting, retire unchanged viewers after confirmed cancellation cleanup, and expose concrete native failure diagnostics.
+- Avoid filesystem and Git checks for each streamed output fragment; fence complete native proposals before adoption. Periodically reconcile full history on the same connection so a missing completion notification cannot leave a finished worker waiting indefinitely. Preserve partial WebSocket frames across idle polls.
+- Cancel active native, headless and verification work through owned process supervision, preserving cancellation evidence across recovery.
+- Reclaim unchanged verifier-generated artifacts and remove confirmed landed, owned Git/Orca worktrees. Consume native viewer retirement and attributed supervisor exit evidence, while preserving uncertain or reused resources.
+- Keep agent work within the user-requested scope, report additional work separately, reuse sufficient verification evidence and retain automatic cleanup unless the user explicitly requests resource preservation.
+
+## 0.0.6 — 2026-09-28
 
 ### Fixed
 
+- Remove the exact Codex CLI version gate and credential-file restrictions from native worker selection. Reuse the existing Codex login without copying credentials, while retaining read-only execution and disabling inherited MCP tools for the worker.
+- Remove terminal-count limits, capacity ledgers and project-wide historical terminal admission checks. Old launch records and ledger files no longer block new workers and remain preserved as historical evidence.
+- Preserve completed native proposals when terminal viewer cleanup is deferred. Keep process termination, exact session/HEAD checks and protection of user-owned terminals.
+
+### Changed
+
+- Remove the unused intermediate headless supervisor and tests for retired capacity restrictions. Continue cleaning each owned terminal after its worker exits.
+- Run one Linux/Python 3.11 job for normal code changes. Version-only releases run lint, package build and clean installation checks without repeating the runtime suite; dependency and updater changes retain relevant checks. The four-environment Linux/macOS × Python matrix remains available through manual dispatch.
+- Keep state/configuration formats and worker/skill protocols unchanged. Old terminal concurrency/idle settings no longer impose an additional admission limit; `--jobs` still controls driver task concurrency.
+
+## 0.0.5 — 2026-09-27
+
+### Added
+
+- Declare verification inputs with `init --verify-identity`: track selected files, environment digests and a nonce alongside exact-candidate evidence. Changed or unavailable inputs invalidate cached success; legacy evidence requires fresh verification.
+- Support native Orca-managed Codex worker sessions for the verified Codex CLI 0.157.1 protocol, with owned workspaces, isolated App Server sessions, exact thread/turn associations and fresh review provenance. Launch status and the dashboard expose the recorded mode and compatibility reason.
+- Add bounded worker-terminal capacity, durable retirement evidence and synthetic terminal/native-session measurement scripts.
+
+### Fixed
+
+- Preserve process ownership and cleanup evidence across worker/verification exit, interruption and recovery. Unknown process or terminal cleanup blocks replacement instead of allowing uncertain duplicate launches.
+- Retire owned idle Orca/tmux worker terminals with checked identity and activity, retain uncertain resources for inspection, and account for existing terminals before dispatch.
+
+### Changed
+
+- Ground planning, work, review and starter-template acceptance conditions in the selected outcome and affected invariants; preserve user tradeoffs and keep optional improvements outside required scope.
+- Document verification-input limits, native-session compatibility and this repository's initial self-hosting setup. State/configuration formats and worker/skill protocols remain unchanged.
+
+### Validation
+
+- Published `0.0.4` to `0.0.5` engine upgrade, skill update/rollback and engine rollback passed in an isolated installation; canonical state, pending work and language bindings remained unchanged.
+- Synthetic future-version update checks passed, including active-dashboard exclusion, failed-update rollback and recovery with the CLI missing. Synthetic wheels are test fixtures only.
+- Native-session coverage uses local synthetic server/CLI/process fixtures; real-model/external live acceptance for the new native route has not been performed.
+
+## 0.0.4 — 2026-09-25
+
+### Fixed
+
+- Commit only proposed paths during ordinary work, preserving unrelated staged/unstaged changes and refusing to overwrite existing edits on proposed paths. Integration repairs validate a durable checkout/index checkpoint and record the adopted merge tree before committing.
+- Check clean checkout and exact HEAD before verification cache reuse, before/after review, and at review recording, publication and landing gates. Verification that changes HEAD cannot be recorded as successful; an identical tree at a new HEAD needs current evidence.
+- Run verification commands in a separate process group. On timeout, terminate and confirm the group, including children surviving their parent or ignoring termination; successful parents cannot leave background writers. Unconfirmed cleanup requires attention instead of scheduling more work.
+
+### Validation
+
+- 123 Python tests passed locally, including 11 execution-boundary tests and 11 integration-repair tests. The boundaries were reproduced against `0.0.3` using local Git repositories and real subprocesses without model calls or remote publication.
+
+- Published `0.0.3` to `0.0.4` engine upgrade, skill manifest update/rollback and engine rollback passed in an isolated installation; canonical state, pending work and language bindings remained unchanged.
+
+## 0.0.3 — 2026-09-25
+
+### Fixed
+
+- Connect failed integration to the repair checkout: fetch and pin the current base, merge it into the candidate branch, and provide conflict markers plus readable ancestor/candidate/base files through evidence paths. Resume interrupted repairs without discarding the merge, including after a decision answer or a commit before state persistence.
+- Require renewed verification, publication and independent review of the repaired candidate before landing. Preserve both merge parents even when resolution keeps the candidate tree. Distinguish Git execution errors from actual unresolved conflicts, and repair combined-verification failures on the merged tree.
+
+### Validation
+
+- 111 Python tests passed for the repair implementation, including 10 local Git conflict/recovery regressions. Repair tests use deterministic workers reading real checkout and evidence files; no new live-model acceptance is claimed.
+- Published `0.0.2` to `0.0.3` engine upgrade, skill manifest update/rollback and engine rollback passed in an isolated installation; canonical state and language bindings remained unchanged.
+
+## 0.0.2 — 2026-09-24
+
+### Fixed
+
+- Complete the resource lifecycle after delivery: clean owned implementation/integration/triage worktrees and confirmed idle worker terminals, retain evidence and branches, and journal deferred or interrupted cleanup for retry without reopening the track.
 - Commit task completion and track completion atomically so reconciliation cannot reopen finished work in between. Preserve the candidate SHA separately from the triage checkout SHA.
 
 ### Validation
 
+- Upgraded an isolated installation from the published `0.0.1` wheel to `0.0.2`, updated and rolled back project skills, then rolled back the engine. Canonical state and project language bindings remained unchanged.
 - Real Codex workers in 14 Orca terminals completed three parallel tracks through independent reviews, GitHub PR merges, triage and issue closure in a fresh public fixture, without decisions or runtime errors. Follow-up documentation was registered/linked and left unselected. See the [run artifacts](https://github.com/JakeB-5/todo-flow-terminal-e2e-20260924).
 
 ### Changed
 
-- Unreleased path-based worker protocol 2: run in the assigned checkout with read-only search/read tools; pass document, diff and evidence paths instead of source snapshots. Remove the aggregate 150 KB source cap and diff truncation. Legacy custom adapters must adopt protocol 2 explicitly.
+- Path-based worker protocol 2: run in the assigned checkout with read-only search/read tools; pass document, diff and evidence paths instead of source snapshots. Remove the aggregate 150 KB source cap and diff truncation. Legacy custom adapters must adopt protocol 2 explicitly.
 - Prefer visible Orca terminals, configured terminal launchers or an existing tmux session; use headless when unavailable or explicitly selected. Preserve streamed logs, terminal handles, worker PIDs and completion receipts, and stop uncertain launches without spawning duplicates.
 - Skip the CI matrix for root Markdown guides and presentation assets alone. Check `main` pushes and pull requests, avoid duplicate tag/feature-branch push runs, cancel superseded runs and allow manual full checks.
 

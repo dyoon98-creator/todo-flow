@@ -9,7 +9,10 @@ from unittest.mock import patch
 
 from todo_flow.adapters import command, permitted
 from todo_flow.engine import Engine
+from todo_flow.process_barrier import ProcessBarrierError
+from todo_flow.process_launch import LaunchGate
 from todo_flow.store import Conflict, Store, encode
+from todo_flow.terminal_retirement import TerminalObservation
 
 DOC = {
     "id": "addition",
@@ -50,6 +53,31 @@ class StoreTests(unittest.TestCase):
         self.s.start("other", "batch")
         self.assertEqual(len(self.s.snapshot()["tasks"]), 2)
 
+    def test_claim_and_recovery_registration_commit_or_rollback_together(self):
+        self.s.start("addition")
+        old = self.s.claim("old")
+        self.s.control("addition", "cancel")
+        for fail in (True, False):
+            try:
+                with self.s.transaction() as c:
+                    c.execute("UPDATE tracks SET control='active' WHERE id='addition'")
+                    work = self.s.enqueue(
+                        c, "addition", "work", "Adopt preserved proposal", "recovery"
+                    )
+                    task = self.s.claim("recovery", connection=c)
+                    self.assertEqual(task["id"], work)
+                    self.s.assert_claim(c, task)
+                    with self.assertRaises(Conflict):
+                        self.s.assert_claim(c, old)
+                    if fail:
+                        raise RuntimeError("Recovery registration interrupted")
+            except RuntimeError:
+                self.assertEqual(self.s.track("addition")["control"], "cancelled")
+                self.assertEqual(len(self.s.snapshot()["tasks"]), 1)
+                self.assertEqual(len(self.s.snapshot()["attempts"]), 1)
+        self.assertEqual(self.s.track("addition")["control"], "active")
+        self.assertIsNone(self.s.claim("competing-driver"))
+
     def test_stale_result_cannot_write(self):
         self.s.start("addition")
         task = self.s.claim("old")
@@ -65,6 +93,147 @@ class StoreTests(unittest.TestCase):
             self.s.finish(task, {"summary": "x", "next": [{"kind": "bad", "purpose": "x"}]})
         self.assertEqual(self.s.snapshot()["results"], [])
         self.assertEqual(self.s.snapshot()["tasks"][0]["status"], "running")
+
+    def pending_followup(self, kind="work"):
+        self.s.start("addition")
+        with self.s.transaction() as c:
+            c.execute("UPDATE tracks SET head='candidate-a' WHERE id='addition'")
+            self.s.enqueue(c, "addition", "work", "Second parent", "second-parent")
+        first = self.s.claim("first")
+        followup = {"kind": kind, "purpose": "Resolve the same obligation"}
+        self.s.finish(first, {"summary": "First request", "next": [followup]})
+        second = self.s.claim("second")
+        self.assertEqual(second["purpose"], "Second parent")
+        return first, second, followup
+
+    def followup_sources(self, work_id):
+        return [
+            json.loads(event["body"])
+            for event in self.s.snapshot()["events"]
+            if event["type"] in ("work.requested", "work.joined")
+            and json.loads(event["body"]).get("workId") == work_id
+            and "parentWorkId" in json.loads(event["body"])
+        ]
+
+    def assert_pending_followups_join(self, kind):
+        first, second, followup = self.pending_followup(kind)
+        self.s.finish(second, {"summary": "Second request", "next": [followup]})
+        pending = [row for row in self.s.snapshot()["tasks"] if row["status"] == "queued"]
+        self.assertEqual(len(pending), 1)
+        target = pending[0]
+        self.assertEqual((target["kind"], target["purpose"]), (kind, followup["purpose"]))
+        sources = self.followup_sources(target["id"])
+        self.assertEqual(len(sources), 2)
+        self.assertEqual(
+            {(source["parentWorkId"], source["parentAttemptId"]) for source in sources},
+            {(first["id"], first["attempt"]), (second["id"], second["attempt"])},
+        )
+        self.assertEqual(len({source["requestKey"] for source in sources}), 2)
+        self.assertTrue(
+            all(
+                source["head"] == "candidate-a" and source["documentRevision"] == 1
+                for source in sources
+            )
+        )
+        # Claiming against a later checkout must not rewrite the enrollment binding.
+        with self.s.transaction() as c:
+            c.execute("UPDATE tracks SET head='candidate-b' WHERE id='addition'")
+        claimed = self.s.claim("successor")
+        self.assertEqual(claimed["id"], target["id"])
+        self.assertEqual(claimed["obligation_head"], "candidate-a")
+        self.assertEqual(claimed["obligation_revision"], 1)
+        self.s.finish(claimed, {"summary": "Obligation handled"})
+        self.assertIsNone(self.s.claim("no-duplicate"))
+        with self.assertRaises(Conflict):
+            self.s.finish(second, {"summary": "Stale duplicate", "next": [followup]})
+        self.assertEqual(len(self.followup_sources(target["id"])), 2)
+
+    def test_pending_work_followups_join_with_both_sources(self):
+        self.assert_pending_followups_join("work")
+
+    def test_pending_assess_followups_join_with_both_sources(self):
+        self.assert_pending_followups_join("assess")
+
+    def test_followup_matching_requires_exact_pending_candidate(self):
+        self.s.register({**DOC, "id": "other"})
+        self.s.start("addition")
+        parent = self.s.claim("parent")
+        cases = [
+            ("same", {}, True),
+            ("running", {"status": "running"}, True),
+            ("waiting", {"status": "waiting"}, True),
+            ("purpose", {"purpose_suffix": " "}, False),
+            ("kind", {"kind": "assess"}, False),
+            ("head", {"head": "candidate-b"}, False),
+            ("revision", {"revision": 2}, False),
+            ("track", {"track": "other"}, False),
+            ("done", {"status": "done"}, False),
+            ("cancelled", {"status": "cancelled"}, False),
+            ("unknown", {"initial_head": None}, False),
+            ("empty", {"initial_head": ""}, False),
+            ("unbound", {"unbound": True}, False),
+            ("direct", {"direct": True}, False),
+        ]
+        for name, change, joins in cases:
+            with self.subTest(name=name), self.s.transaction() as c:
+                head = change.get("initial_head", "candidate-a")
+                c.execute("UPDATE tracks SET head=?,revision=1", (head,))
+                purpose = "Exact obligation " + name
+                first = self.s.enqueue(
+                    c,
+                    "addition",
+                    "work",
+                    purpose,
+                    name,
+                    parent=None if change.get("unbound") else parent,
+                )
+                if "status" in change:
+                    c.execute("UPDATE tasks SET status=? WHERE id=?", (change["status"], first))
+                track = change.get("track", "addition")
+                c.execute(
+                    "UPDATE tracks SET head=?,revision=? WHERE id=?",
+                    (change.get("head", head), change.get("revision", 1), track),
+                )
+                second = self.s.enqueue(
+                    c,
+                    track,
+                    change.get("kind", "work"),
+                    purpose + change.get("purpose_suffix", ""),
+                    name,
+                    parent=None if change.get("direct") else parent,
+                )
+                self.assertEqual(first == second, joins)
+                if not joins:
+                    row = c.execute("SELECT status FROM tasks WHERE id=?", (second,)).fetchone()
+                    self.assertEqual(row["status"], "queued")
+
+    def test_join_and_new_followup_roll_back_with_parent_result(self):
+        first, second, followup = self.pending_followup()
+        before = self.s.snapshot()
+        with self.assertRaisesRegex(ValueError, "Unknown task kind"):
+            self.s.finish(
+                second,
+                {
+                    "summary": "Interrupted registration",
+                    "next": [
+                        followup,
+                        {"kind": "work", "purpose": "Another obligation"},
+                        {"kind": "invalid", "purpose": "Fail after joining and inserting"},
+                    ],
+                },
+            )
+        after = self.s.snapshot()
+        before.pop("observedAt")
+        after.pop("observedAt")
+        self.assertEqual(after, before)
+        self.s.finish(second, {"summary": "Retry registration", "next": [followup]})
+        pending = [row for row in self.s.snapshot()["tasks"] if row["status"] == "queued"]
+        self.assertEqual(len(pending), 1)
+        sources = self.followup_sources(pending[0]["id"])
+        self.assertEqual(
+            {source["parentWorkId"] for source in sources}, {first["id"], second["id"]}
+        )
+        self.assertEqual(len(sources), 2)
 
     def test_decision_resume_without_parent(self):
         self.s.start("addition")
@@ -161,17 +330,24 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(Engine(self.s).run(max_tasks=3), 0)
         self.assertTrue(all(w["status"] == "done" for w in snap["tasks"]))
 
-    def test_recovery_fences_expired_claim(self):
+    def test_partial_launch_evidence_cannot_recover_expired_claim(self):
         self.s.start("addition")
         old = self.s.claim("dead")
+        LaunchGate.prepare(
+            self.s.path, "addition", old["attempt"], "never-dispatched", backend="test"
+        ).cancel_pending()
         with self.s.transaction() as c:
             c.execute("UPDATE tasks SET lease=?", (time.time() - 60,))
+        before = self.s.snapshot()
         Engine(self.s).reconcile()
-        new = self.s.claim("new")
-        self.assertGreater(new["generation"], old["generation"])
-        with self.assertRaises(Conflict):
-            self.s.finish(old, {"summary": "late"})
-        self.s.finish(new, {"summary": "recovered", "question": "continue?"})
+        self.assertIsNone(self.s.claim("new"))
+        after = self.s.snapshot()
+        self.assertEqual(after["tasks"], before["tasks"])
+        self.assertEqual(after["attempts"], before["attempts"])
+        self.assertFalse(any(event["type"] == "claim.recovered" for event in after["events"]))
+        with self.assertRaises(ProcessBarrierError):
+            Engine(self.s).apply_changes(old, self.repo, [{"path": "calc.py", "content": "late"}])
+        self.assertIn("NotImplementedError", (self.repo / "calc.py").read_text())
 
     def test_unreviewed_landing_refused(self):
         self.s.start("addition")
@@ -230,12 +406,20 @@ class IntegrationTests(unittest.TestCase):
         for t in snap["tracks"]:
             self.assertIn("Ran 1 test", json.loads(t["verification"])["output"])
 
-    def test_terminal_driver_completes_parallel_tracks_through_triage(self):
+    def terminal_fixture(self):
+        # Each marker models a tab that outlives its worker process. Only the
+        # synthetic host adapter can remove it; process exit leaves it intact.
+        inventory = self.root / "physical-terminals"
+        inventory.mkdir()
         launcher = self.root / "terminal.py"
         launcher.write_text(
-            "import subprocess,shlex,sys\n"
+            "import pathlib,subprocess,shlex,sys,uuid\n"
+            "token=uuid.uuid4().hex\n"
+            "tab=pathlib.Path(sys.argv[2])/token\n"
+            "tab.write_text(token)\n"
             "subprocess.Popen(shlex.split(sys.argv[1]),stdout=subprocess.DEVNULL,"
             "stderr=subprocess.DEVNULL,start_new_session=True)\n"
+            "print(tab)\n"
         )
         self.s.register({**DOC, "id": "second"})
         for track in ("addition", "second"):
@@ -243,9 +427,40 @@ class IntegrationTests(unittest.TestCase):
         engine = Engine(self.s)
         engine.config.update(
             worker_launcher="terminal",
-            terminal_command=[sys.executable, str(launcher), "{command}"],
+            terminal_command=[sys.executable, str(launcher), "{command}", str(inventory)],
         )
-        engine.run(jobs=2, max_tasks=20)
+        return engine, inventory
+
+    def test_terminal_driver_completes_parallel_tracks_through_triage(self):
+        engine, inventory = self.terminal_fixture()
+        closed = set()
+        test = self
+
+        class SyntheticTerminalAdapter:
+            def inspect(self, resource):
+                tab = Path(resource["handle"])
+                test.assertEqual(tab.parent.resolve(), inventory.resolve())
+                present = tab.exists()
+                return TerminalObservation(
+                    "idle" if present else "absent",
+                    resource,
+                    "Complete synthetic tab inventory; no interactive input source",
+                    tab.read_text() if present else "",
+                )
+
+            def close(self, observation):
+                tab = Path(observation.resource["handle"])
+                # Synthetic tabs have unique incarnations and no concurrent
+                # input producer. Refuse a changed activity snapshot anyway.
+                if tab.exists() and tab.read_text() == observation.activity_token:
+                    test.assertNotIn(str(tab), closed)
+                    tab.unlink()
+                    closed.add(str(tab))
+
+        with patch(
+            "todo_flow.terminal_release.terminal_adapter", return_value=SyntheticTerminalAdapter()
+        ):
+            engine.run(jobs=2, max_tasks=20)
         snapshot = self.s.snapshot()
         self.assertTrue(
             all(t["status"] == "done" for t in snapshot["tracks"]), encode(snapshot["decisions"])
@@ -255,6 +470,32 @@ class IntegrationTests(unittest.TestCase):
         self.assertGreaterEqual(len(receipts), 6)
         self.assertTrue(all(json.loads(p.read_text())["returncode"] == 0 for p in receipts))
         self.assertEqual(len(snapshot["triages"]), 2)
+        self.assertEqual(list(inventory.iterdir()), [])
+        self.assertEqual(len(closed), len(receipts))
+        self.assertFalse((self.s.path / "terminal-slots.json").exists())
+        for receipt in receipts:
+            folder = receipt.parent
+            retirement = json.loads((folder / "terminal-retirement.json").read_text())
+            self.assertEqual(retirement["status"], "closed")
+            self.assertTrue((folder / "output.json").is_file())
+            self.assertTrue((folder / "launch.json").is_file())
+
+    def test_unsupported_terminal_cleanup_does_not_block_parallel_tracks(self):
+        engine, inventory = self.terminal_fixture()
+        engine.run(jobs=2, max_tasks=20)
+        snapshot = self.s.snapshot()
+        self.assertTrue(
+            all(t["status"] == "done" for t in snapshot["tracks"]), encode(snapshot["decisions"])
+        )
+        self.assertFalse([d for d in snapshot["decisions"] if d["status"] == "open"])
+        receipts = list((self.s.path / "attempts").glob("*/terminal-process.json"))
+        self.assertGreaterEqual(len(receipts), 6)
+        self.assertTrue(all(json.loads(p.read_text())["cleanup_confirmed"] for p in receipts))
+        self.assertEqual(len(list(inventory.iterdir())), len(receipts))
+        self.assertFalse((self.s.path / "terminal-slots.json").exists())
+        for receipt in receipts:
+            report = json.loads((receipt.parent / "terminal-retirement.json").read_text())
+            self.assertEqual(report["status"], "preserved")
 
     def test_reconcile_cannot_restart_work_between_task_and_track_completion(self):
         self.s.start("addition")

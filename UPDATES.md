@@ -4,7 +4,7 @@
 
 Update the shared engine once, then update the installed skills of each project. Project documents and execution records remain in their existing state directory. Updating does not reinitialize a project or start pending work.
 
-## Available in 0.0.1
+## Update capabilities
 
 | Capability | Behavior |
 |---|---|
@@ -20,7 +20,19 @@ Update the shared engine once, then update the installed skills of each project.
 
 The `0.0.1` release contracts are **state format 1, configuration format 1, worker protocol 1 and skill protocol 1**. Package versions and data formats are independent. Older file-backed projects without the new optional configuration metadata use format/protocol 1. No data migration is necessary for this release. The existing explicit SQL-to-files migration remains a separate command.
 
-Unreleased `main` initializes **worker protocol 2** for path-based inputs. State/configuration/skill formats remain 1. The built-in Claude/Codex adapters accept existing project configurations and produce the new path-based input without rewriting state. Custom command adapters must be updated to read `workspace` and `paths`, and explicitly opt into protocol 2 while stopped; protocol-1 custom workers fail before spawning. Older release engines cannot run newly initialized protocol-2 projects. Terminal selection is a separate optional setting (`worker_launcher`, default `auto`); `--launcher` changes only the current driver. See [worker execution](OPERATIONS.md#worker-context-and-terminal-launchers-unreleased).
+Version `0.0.2` initializes **worker protocol 2** for path-based inputs. Newly initialized project configurations require engine `0.0.2` or later. State/configuration/skill formats remain 1. The built-in Claude/Codex adapters accept existing project configurations and produce the new path-based input without rewriting state. Custom command adapters must be updated to read `workspace` and `paths`, and explicitly opt into protocol 2 while stopped; protocol-1 custom workers fail before spawning. Older release engines cannot run newly initialized protocol-2 projects. Terminal selection is a separate optional setting (`worker_launcher`, default `auto`); `--launcher` changes only the current driver. See [worker execution](OPERATIONS.md#worker-context-and-terminal-launchers).
+
+Version `0.0.3` fixes integration repair handoffs and recovery without changing these formats or protocols. No state migration is required. The repair instructions are bundled with the engine; check each project’s installed skills using the normal update procedure.
+
+Version `0.0.4` adds commit, review and verification-process boundary checks without changing formats or protocols. No state migration is required. A previously interrupted merge without the new checkout/index checkpoint is preserved for inspection instead of adopting unknown staged changes. Finish or inspect existing repairs before switching engines; see [execution boundaries](OPERATIONS.md#review-landing-and-completion).
+
+Version `0.0.5` adds declared verification-input identity, durable process cleanup, bounded terminal lifecycle and supported native Orca/Codex sessions. State/configuration formats and worker/skill protocols remain unchanged. Legacy verification success without identity needs fresh verification. `init --verify-identity` applies to new state; existing configuration is not rewritten by an upgrade. Update project skills to receive the scope-grounded planning, work and review guidance. Native sessions currently support Codex CLI 0.157.1; compatibility routes and local-only validation limits are documented in [operations](OPERATIONS.md#native-orca-worker-sessions).
+
+Version `0.0.6` removes the exact Codex version gate, credential-file restrictions and terminal-count admission checks. Native workers reuse the existing Codex login; old terminal records and capacity ledgers remain historical evidence and require no migration before another worker starts. Completed proposals survive deferred viewer cleanup. State/configuration and worker/skill protocol versions are unchanged; update project skills for the revised execution guidance.
+
+Version `0.0.7` removes the default worker deadline, adds host-observed native sidebar status and completion-history reconciliation, and delivers active cancellation plus verified owned-worktree cleanup. Existing explicit worker limits remain; `worker_timeout: null` selects unlimited execution. State/configuration formats and worker/skill protocols are unchanged. Update project skills for the requested-scope, proportional-verification and automatic-cleanup instructions.
+
+Version `0.0.8` adds track-level activity summaries, exact pending-obligation deduplication with parent provenance, bounded replacement proposals and retained verification log artifacts. State/configuration formats and worker/skill protocols remain unchanged. Update project skills to receive the bounded-change proposal guidance.
 
 ## 1. Inspect and stop relevant processes
 
@@ -41,11 +53,11 @@ All cooperating processes must use the same `TODO_FLOW_HOME`. Process locks are 
 
 This path requires an existing **`uv tool install` installation** and `uv` on PATH. Source checkouts, editable environments, ordinary virtualenv installations and uv tool installs with custom extra requirements/options or entrypoints are diagnosed rather than overwritten. Update those environments using their original workflow while idle, then run project compatibility and skill checks.
 
-Obtain a trusted release wheel. The filename below illustrates a future version; `0.0.2` is not published by this guide.
+Download the wheel and `SHA256SUMS` from the [v0.0.8 release](https://github.com/JakeB-5/todo-flow/releases/tag/v0.0.8), verify its checksum, then pass the local wheel path:
 
 ```sh
-todo-flow upgrade --wheel /absolute/releases/todo_flow-0.0.2-py3-none-any.whl --dry-run
-todo-flow upgrade --wheel /absolute/releases/todo_flow-0.0.2-py3-none-any.whl
+todo-flow upgrade --wheel /absolute/releases/todo_flow-0.0.8-py3-none-any.whl --dry-run
+todo-flow upgrade --wheel /absolute/releases/todo_flow-0.0.8-py3-none-any.whl
 ```
 
 The plan shows versions, artifact digest, compatibility contracts and known projects. Execution rechecks those facts under an exclusive runtime lock, snapshots the artifact, backs up the installed environment and two entrypoints, invokes uv, and checks the installed version, entrypoints and bundled skills. An ordinary install/validation failure restores the previous environment. Upgrades do not change project configuration, documents, claims or remote state.
@@ -125,7 +137,7 @@ It checks an active dashboard blocking upgrade, a successful engine update, skil
 
 ## Further preparation for future releases
 
-These are follow-up items, not capabilities already provided by 0.0.1.
+These are follow-up items, not capabilities already provided by the current implementation.
 
 | Priority | Preparation | Reason / completion criterion |
 |---|---|---|

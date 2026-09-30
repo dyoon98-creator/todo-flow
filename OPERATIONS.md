@@ -64,7 +64,7 @@ The dashboard opens `/documents/ID/REVISION/index.html`. Use HTTP rather than `f
 - Execute concrete IDs with trackrun. Different tracks use separate worktrees. Workers choose bounded useful next work from durable context.
 - Active TODOs use a continuous list without page buttons. Completed tracks have a separate searchable archive with incremental loading.
 
-`--jobs N` limits concurrent tasks in one driver (default 2), not selected tracks. `--max-tasks N` limits assignments in one run (default 100). Pending work remains in files when that limit is reached.
+`--jobs N` limits concurrent tasks in one driver (default 2), not selected tracks. `--max-tasks N` limits assignments in one run (default 100). Pending work remains in files when that limit is reached. Terminals have no separate count limit: old `terminal_concurrency`, `terminal_idle_limit` and capacity ledgers no longer participate in launch admission. Cleanup inspects only the current execution; an old or unconfirmed UI tab does not block other workers.
 
 ```sh
 # Optional: submit to an already running driver.
@@ -76,9 +76,11 @@ todo-flow --state STATE run --daemon
 
 Multiple drivers do not share a global concurrency budget. A dead driver or expired claim is not completion. Review owners, leases, attempts and results before inferring current activity.
 
-## Worker context and terminal launchers (unreleased)
+<a id="worker-context-and-terminal-launchers-unreleased"></a>
 
-This section describes `main` after `0.0.1`; the published `0.0.1` wheel retains snapshot workers. Workers now start in the assigned implementation/review checkout, or the exact fetched-base checkout for triage. Input contains the task, workspace, head, language, exploration hints, write boundaries and a `paths` map. Goal/conditions, the rich track document, full diff, verification, decisions, prior results and triage evidence are read by path. Project source is not collected into stdin, and there is no aggregate 150 KB source limit. Model context limits still apply to selected reads.
+## Worker context and terminal launchers
+
+This section describes `0.0.2`; the published `0.0.1` wheel retains snapshot workers. Workers now start in the assigned implementation/review checkout, or the exact fetched-base checkout for triage. Input contains the task, workspace, head, language, exploration hints, write boundaries and a `paths` map. Goal/conditions, the rich track document, full diff, verification, decisions, prior results and triage evidence are read by path. Project source is not collected into stdin, and there is no aggregate 150 KB source limit. Model context limits still apply to selected reads.
 
 Codex uses read-only shell tools (including `rg`); Claude exposes Read, Glob and Grep. `context_patterns` / `--context` are navigation hints, not read-access controls. Run with the access appropriate to your project. Workers return JSON proposals; the engine still applies authorized writes, runs verification, commits and handles remote effects. These are automatic workers with live logs, not interactive agent chats.
 
@@ -90,7 +92,7 @@ trackrun TRACK_ID --launcher orca
 todo-flow --state STATE run --launcher headless
 ```
 
-`auto` first uses a running Orca runtime that recognizes the project's repository. It opens a titled terminal under that project and starts the worker in its assigned checkout. Otherwise it uses a configured `terminal_command`, then tmux when invoked inside an existing tmux session, then headless. Explicit `orca`, `tmux` or `terminal` modes fail when unavailable. Remote Orca PTYs require a driver on that host; they are not launched from a local driver. Completed terminal tabs remain available for inspection.
+`auto` first uses a running Orca runtime that recognizes the project's repository. It opens a titled terminal under that project and starts the worker in its assigned checkout. Otherwise it uses a configured `terminal_command`, then tmux when invoked inside an existing tmux session, then headless. Explicit `orca`, `tmux` or `terminal` modes fail when unavailable. Remote Orca PTYs require a driver on that host; they are not launched from a local driver. Exited worker terminals are closed after track completion when their identity and inactivity can still be verified; their logs remain in the attempt directory. Use `--no-auto-cleanup` when completed run resources should remain open for inspection.
 
 For another terminal application, configure `terminal_command` as an argv array for a trusted launcher that returns after opening the terminal. `{command}` is the shell-quoted worker bridge command; `{cwd}` and `{title}` are optional placeholders. The launcher must start that command unchanged and return within ten seconds. Authentication is inherited from the terminal environment; credentials are not copied into launch records. Use headless if the required authentication exists only in the calling shell.
 
@@ -115,9 +117,21 @@ Diagnose tool failures from attempt records rather than replacing them with inve
 
 ## Review, landing and completion
 
+**Execution boundaries in `0.0.4`:** ordinary proposal commits include only proposed paths. Unrelated staged and unstaged files remain untouched; existing edits on a proposed path stop application. Remaining checkout changes block verification and review rather than being silently adopted. Merge repairs have a recorded checkout/index checkpoint; edits after preparation, or a resumed merge without a checkpoint, require inspection. Recovery accepts a committed repair only when its parents and recorded tree match.
+
+Verification checks checkout cleanliness before using a cache and checks both HEAD and cleanliness after the command. Review checks the expected HEAD and clean checkout before and after the worker reads it, and rechecks before recording a verdict. Publication and landing also reject a dirty or mismatched candidate. Preserve manual recovery edits and resolve the decision before resuming; do not reset or automatically stage them.
+
+Verification commands run in their own process group. Timeout cleanup signals the entire group, escalates to a kill, reaps the direct process and confirms no live group members remain before returning a failed verification. Children left by a successful parent are also stopped and cause failure. If termination cannot be confirmed, execution stops for attention.
+
+`verify_timeout` accepts positive finite numbers of seconds or JSON `null` for no execution time limit. Omitting it retains the 180-second default. A null timeout is preserved in verification identity and differs from every numeric timeout, so changing between them invalidates cached verification. Claim cancellation, driver-disconnection cleanup, bounded cleanup waits and durable termination confirmation remain active without an execution time limit. `worker_timeout` controls worker execution separately.
+
 Review uses a fresh agent context independent of implementation and examines the exact candidate and verification. When the same GitHub account owns the PR, the assessment is a COMMENT review, not another person's APPROVE.
 
 The default endpoint is `review`. An explicitly authorized `land` endpoint requires both `--endpoint land` and `--allow-land` at initialization. The host combines current base and candidate in an isolated checkout, verifies that combined tree, and publishes the exact verified merge. Base advancement triggers another comparison; branch protection is not bypassed.
+
+**Integration repair in `0.0.3`:** an actual merge conflict or failed combined verification records durable repair intent and invalidates the old review/verification. Before the work session, the host fetches and pins the current base, then merges it into the owned candidate checkout. `paths.integration_repair` describes the pinned commits, failure, base-diff path and conflicting paths; each conflict includes readable ancestor/candidate/base versions, and workspace files contain the merge markers. Content remains in files rather than being injected into the prompt. Git failures without unmerged paths are reported as execution errors.
+
+The worker returns resolved UTF-8 file proposals or a concrete question. Dirty checkouts are preserved, missing resolutions and remaining markers block commit, and unsupported binary/deletion resolutions require attention. The host records both merge parents, verifies and publishes the repaired candidate, then requests a fresh independent review before retrying landing. Decision answers and interrupted attempts resume the recorded merge without aborting it; a later base advance is checked again at landing.
 
 Confirmed landing schedules triage. A current cleared receipt is required before issue closure and completion. Original obligations cannot be moved to a follow-up TODO or Watch to make the source track pass. Repairs use a fresh branch, verification and independent review. Separate new TODOs are registered but await human review and selection.
 
@@ -141,59 +155,36 @@ Use [UPDATES.md](UPDATES.md) for guarded engine replacement, manifest-based skil
 ## Cleanup, migration and hooks
 
 ```sh
+todo-flow --state STATE cleanup TRACK_ID --dry-run
 todo-flow --state STATE cleanup TRACK_ID
 todo-flow migrate-files --source OLD_SQL_STATE --target NEW_FILE_STATE
 todo-flow --state STATE hooks
 ```
 
-Cleanup is explicit and preserves branches. It requires a finished execution, a clean worktree and confirmed remote inclusion for a land endpoint; unlanded candidates are preserved. Migration copies the legacy SQL store into new file state; it is not an importer for another tool's ledger.
+In `0.0.2`, completion requests automatic cleanup of the track's implementation worktrees (including earlier repair attempts), integration checkouts, triage checkouts and exited worker terminals. The published `0.0.1` release only has explicit cleanup of the current implementation worktree. `init --no-auto-cleanup` disables automatic cleanup for a new project; `trackrun ... --no-auto-cleanup` or `run --no-auto-cleanup` disables it for one driver. Manual cleanup remains available.
+
+Cleanup preserves the main checkout, local branches, track documents, revisions, results, verification/review/triage evidence and raw attempt logs. It checks the actual checkout HEAD against the fetched remote base, not just the recorded candidate SHA. Unlanded candidates, unfinished work, dirty/untracked files, unknown ignored files, changed terminal identities and terminals with newer activity are retained with a reason. Ignored Python `__pycache__/*.pyc` files are disposable; other ignored files require inspection. No forced worktree removal or branch deletion is used.
+
+Orca terminal closure uses the recorded PTY/incarnation and a fresh inventory. A reused terminal is preserved. tmux windows are closed only when the named single pane has exited; custom terminal launchers without a supported close interface require manual closure. An unresolved terminal also retains its associated checkout.
+
+Cleanup intent and per-resource outcomes live in `cleanup/TRACK/EXECUTION.json` and `cleanup.requested`, `cleanup.complete` or `cleanup.deferred` events. An interruption can be retried with `cleanup TRACK_ID`; a subsequent driver retries pending cleanup requests. A cleanup problem does not reopen delivered work or rerun agents. Historical workspace paths remain in evidence after removal; the retained Git branches/commits preserve the source.
+
+Migration copies the legacy SQL store into new file state; it is not an importer for another tool's ledger.
 
 Internal hooks are durable events, including document registration, execution acceptance, worker claims, work results, verification, effect confirmation, decision answers, controls, claim recovery, watch changes, triage and completion. A filesystem redo journal and durable agenda preserve handoffs. External callback hooks are not currently provided.
 
-## Local extension: manually supervised Orca result import
+### Native Orca worker sessions
 
-`python -m todo_flow.manual_orca` is a **local extension**, not an upstream `todo-flow` command. Use it when the configured worker cannot safely run the bounded read-only review. It never starts `Engine` or `trackrun`, and it leaves the configured worker command unchanged. `prepare` first creates and claims one TODO work request through the file-backed `Store`; Main then runs the actual Orca policy dispatch. The task stays active until Main binds completed runtime evidence and imports the outputs.
+Workers run without a wall-clock limit by default, including the process supervisor and native proposal transport. An explicit `worker_timeout` in project configuration still applies; use JSON `null` for no limit. Startup handshakes and individual CLI calls remain bounded. The runtime continues checking the claim while a native worker runs, so cancellation stops the owned process group and retires its unchanged viewer even without a time limit. Driver disconnection retains the existing supervisor cleanup barrier.
 
-Run `prepare` only after source snapshots and skill files are frozen. It validates both manifests and backs up the TODO state before changing it:
+The visible client runs in a dedicated terminal in the managed worktree. Its host-side bridge uses Orca's installed Codex status hook with the terminal's own routing environment to register the same session in the sidebar. The model's hooks remain disabled. Only a journal matching the task/generation, candidate HEAD, workspace, thread and turn can drive this display. `native-sidebar.json` retains a fresh public `worktree ps` observation of that exact pane; a successful hook process or terminal-create response alone is not confirmation. `launch-status` distinguishes confirmed sidebar sessions from unconfirmed clients. The bridge exits with its client rather than leaving a shell. Sidebar state describes the worker's activity, never verification, review, landing or track completion.
 
-```sh
-TODO_REPO="/Users/dongchanyoon/Documents/Work/Projects/55.todo-flow"
-TODO_STATE="/Users/dongchanyoon/Library/Application Support/dongchanyoon/vault-writer/c8c2a400ae9d128235ed947208995fa3ae55201ed9718c53dc733b2c42814df3/todo-flow"
-STATE_PARENT="/Users/dongchanyoon/Library/Application Support/dongchanyoon/vault-writer/c8c2a400ae9d128235ed947208995fa3ae55201ed9718c53dc733b2c42814df3"
-ARTIFACT_DIR="/Users/dongchanyoon/.codex/artifacts/knowledge-flow-repair-20260926"
+Native failures record their exception type and message in `native-session.json` and report those paths in the decision. Completed proposals and failed/stopped workers project an end-of-turn event before the unchanged viewer is retired. Unknown sidebar delivery preserves an explicit unconfirmed receipt; it cannot weaken process cleanup or proposal validation.
 
-PYTHONPATH="$TODO_REPO/src" python3 -m todo_flow.manual_orca prepare \
-  --state "$TODO_STATE" \
-  --track knowledge-flow-independent-validation \
-  --purpose "Fresh source-to-draft validation from frozen source and skill manifests" \
-  --contract "$ARTIFACT_DIR/fresh-trial-contract.md" \
-  --source-manifest "$ARTIFACT_DIR/fresh-source-manifest.json" \
-  --skill-manifest "$ARTIFACT_DIR/fresh-skill-manifest.json" \
-  --backup "$STATE_PARENT/todo-flow.pre-manual-orca-20260926"
-```
+Streaming fragments do not trigger filesystem scans or Git subprocesses. The host checks the current claim and exact HEAD when a complete proposal is available, while the owning driver continues checking cancellation. Every five seconds the collector may read full turn history on the same connection, without starting or resuming another turn. A unique completed final answer for the exact bound thread/turn can supply completion when its notification is missing; partial, ambiguous, failed or mismatched history cannot. One-second receive polls preserve partial WebSocket frames and do not impose a worker deadline. Existing Python worker processes retain their loaded code after a source update; preserve their results and reconcile their owned cleanup before handing work to an updated process.
 
-Save `request_path` and `request_sha256` from the JSON output. Before dispatch, Main includes the exact `request_id`, `task_id`, `attempt_id`, request hash, contract hash, source-manifest hash and skill-manifest hash in the Orca startup prompt. The worker reads the supplied fresh source snapshots and frozen skill sources, stages all four outputs under `ARTIFACT_DIR`, and writes only worker-authored facts in `fresh-run.json`; it must not guess or include a final Orca record hash.
+New Codex tracks can use Orca-managed workspaces, with a durable create intent and independently checked Git/Orca ownership before registration. Existing candidates retain their registered paths. The native adapter uses the existing `CODEX_HOME` and lets Codex handle its configured authentication, including file, keyring and environment credentials. It does not inspect or copy credentials and does not gate execution on a Codex version string. Per-process configuration overrides keep the workspace untrusted, external integrations disabled, the sandbox read-only/no-network and approval policy `never`. Before starting a thread, the adapter reads effective configuration in memory and disables each inherited MCP registration; configuration responses are not written to attempt evidence. Actual startup, authentication and protocol failures remain failures with preserved evidence, not permission to launch a second worker. Codex retains ownership of its login storage and token refreshes.
 
-After the exact Orca runtime exits successfully, Main supplies its global-dispatch record. `bind-completion` verifies the real `orca-global-dispatch/v2` and `orca-provider-bridge/v1` record, startup prompt hash, `orca-interactive/v1` status, successful process exit, official dispatch/session/chain completion and report hash. It then appends a separate `parent_completion` object to `fresh-run.json`, binds that object to the unchanged `worker_authored` section hash, and writes `todo-manual-result.json`. No send receipt is required for the startup-bound provider path; this extension does not invent `DELIVERED` evidence.
+The host sends each initialize/thread/turn request once and records it before transmission. An uncertain start response blocks replacement attempts for that task; it is never covered by an exec fallback. When a known turn loses its connection but the original server and socket identity remain live, the adapter reconnects once and reads full history for that exact thread/turn. It never repeats thread/start or turn/start, and unknown, additional or incomplete history remains blocked. A visible client receives only the exact remote thread/socket, while the complete final proposal comes from ordered App Server notifications. Terminal acceptance is not worker completion. The host verifies claim and candidate HEAD, and the existing supervisor confirms process-group exit before effects. Viewer identity, activity, exit and complete inventory are checked before retirement. Inspection-to-close input races use the existing authorized policy. Unknown terminal cleanup preserves the tab and its evidence without invalidating a completed proposal. Actual process-group termination and exact session/HEAD checks remain required.
 
-```sh
-REQUEST_PATH="<request_path printed by prepare>"
-ORCA_RUN_RECORD="<exact completed global-dispatch record path from Main>"
-
-PYTHONPATH="$TODO_REPO/src" python3 -m todo_flow.manual_orca bind-completion \
-  --state "$TODO_STATE" \
-  --request "$REQUEST_PATH" \
-  --record "$ORCA_RUN_RECORD" \
-  --result "$ARTIFACT_DIR/todo-manual-result.json"
-
-PYTHONPATH="$TODO_REPO/src" python3 -m todo_flow.manual_orca import-result \
-  --state "$TODO_STATE" \
-  --request "$REQUEST_PATH" \
-  --result "$ARTIFACT_DIR/todo-manual-result.json"
-
-todo-flow --state "$TODO_STATE" status
-```
-
-`import-result` rechecks current request, source and skill hashes, all staged output hashes, source-claim bindings, helper evidence and unchanged second assessment. It completes the claimed work task and pauses the track in one `Store` transaction. Any mismatched binding, incomplete runtime, vault path, changed source, unsupported worker effect or stale report hash fails closed and leaves the task uncompleted.
-
-This importer accepts only results bound to the prepared TODO request and verified Orca records. A completed native run without that request binding and Orca evidence cannot be imported or attached retroactively as a TODO completion. Preserve out-of-band evidence by revising the paused track document through `Store.register` with the expected revision, then pause the track again because registration resets its control to idle. Leave unmet track conditions and TODO task/result records unchanged.
+Review uses a new server/thread and known implementation-session provenance; legacy implementation records keep the existing fresh review route. `launch-status` and task inspection expose the actual mode, compatibility reason and resource associations without opening an execution endpoint. Real-model/external live acceptance remains unperformed; local synthetic server/CLI/process fixtures and recorded local protocol probes are separate evidence.
