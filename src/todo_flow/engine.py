@@ -11,10 +11,11 @@ from pathlib import Path
 from .adapters import GitHub, command, file_lock
 from .store import Conflict, encode, fingerprint, uid
 from .worker import run_worker
-from . import proposal_application
+from . import clean_integration, proposal_application
+from .verification_artifacts import checkout_identity
 from .maintenance import guarded
 from . import integration as integration_repair
-from . import verification_identity, verification_logs
+from . import condition_evidence, verification_identity, verification_logs, verification_outcomes
 from .verification_log_view import log_view
 from .checkout import require_clean
 from .verification_evidence import require_current
@@ -23,7 +24,7 @@ from .cancel_execution import reconcile_cancelled
 from .verification import VerificationCleanupError, run as run_verification
 from .process_barrier import ProcessBarrier, ProcessBarrierError
 from .process_inventory import ProcessInventory, launch_identity
-from . import managed_workspace
+from . import managed_workspace, verification_capacity
 
 
 class Engine:
@@ -128,7 +129,7 @@ class Engine:
         self.update(task, head=command(["git", "rev-parse", "HEAD"], workspace))
         return workspace
 
-    def verify(self, task, workspace):
+    def verify(self, task, workspace, *, scope="full"):
         proposal_application.require_clear(self, task["track"])
         self.process_barrier(task["track"]).require_clear()
         self.check_claim(task)
@@ -137,7 +138,8 @@ class Engine:
         head = require_clean(workspace)
         tree = command(["git", "rev-parse", "HEAD^{tree}"], workspace)
         environment = verification_identity.execution_environment()
-        identity = verification_identity.capture(self.config, workspace, environment)
+        identity = verification_identity.capture(self.config, workspace, environment, scope=scope)
+        scope = identity.get("scope", "full")
         key = fingerprint([tree, self.config["verify"]])
         prior = self.store.track(task["track"])["verification"]
         if prior:
@@ -145,10 +147,11 @@ class Engine:
             same_identity = verification_identity.matches(prior.get("identity"), identity)
             if (
                 prior.get("key") == key
-                and prior.get("ok")
+                and verification_outcomes.passed(prior)
                 and prior.get("head") == head
                 and prior.get("tree") == tree
                 and prior.get("command") == self.config["verify"]
+                and prior.get("scope", "full") == scope
                 and same_identity
             ):
                 require_clean(workspace, head)
@@ -157,53 +160,129 @@ class Engine:
         log.mkdir(parents=True, exist_ok=True)
         started = time.time()
         log_reference = None
+        checks = []
+        outcome, reason = "inconclusive", "Verification did not finish"
         try:
-            before = verification_identity.capture(self.config, workspace, environment)
+            before = verification_identity.capture(self.config, workspace, environment, scope=scope)
             if not verification_identity.matches(identity, before):
                 raise verification_identity.VerificationIdentityError(
                     "Verification inputs changed before execution"
                 )
-            execution = launch_identity(self.store.path, task)
-            log_reference = verification_logs.reference(execution)
-            output = run_verification(
-                self.config["verify"],
-                workspace,
-                timeout=self.config.get("verify_timeout", 180),
-                env=environment,
-                launch_identity=execution,
-                check=lambda: self.check_claim(task),
-            )
+            commands = [
+                (f"preflight-{index}", argv)
+                for index, argv in enumerate(identity.get("preflight", []), start=1)
+            ]
+            if scope == "partial":
+                commands.extend(
+                    (f"related-{index}", argv)
+                    for index, argv in enumerate(identity["policy"]["related"], start=1)
+                )
+            else:
+                commands.append(("final", identity["command"]))
+            for stage, argv in commands:
+                self.check_claim(task)
+                self.process_barrier(task["track"]).require_clear()
+                execution = launch_identity(self.store.path, task)
+                log_reference = verification_logs.reference(execution)
+                check = {
+                    "stage": stage,
+                    "command": argv,
+                    "logReference": log_reference,
+                    "ok": False,
+                }
+                checks.append(check)
+                limit = self.config.get("verify_concurrency")
+                with verification_capacity.slot(
+                    self.store.path,
+                    limit,
+                    task,
+                    execution,
+                    stage=stage,
+                    workspace=workspace,
+                    head=head,
+                    scope=scope,
+                    check=lambda: self.check_claim(task),
+                ):
+                    if limit is not None:
+                        # Waiting grants capacity only, never claim/input validity.
+                        self.check_claim(task)
+                        proposal_application.require_clear(self, task["track"])
+                        self.process_barrier(task["track"]).require_clear()
+                        require_clean(workspace, head)
+                        current = verification_identity.capture(
+                            self.config, workspace, environment, scope=scope
+                        )
+                        if not verification_identity.matches(identity, current):
+                            raise verification_identity.VerificationIdentityError(
+                                "Verification inputs changed while waiting for capacity"
+                            )
+                    output = run_verification(
+                        argv,
+                        workspace,
+                        timeout=self.config.get("verify_timeout", 180),
+                        env=environment,
+                        launch_identity=execution,
+                        check=lambda: self.check_claim(task),
+                    )
+                check.update(
+                    ok=True,
+                    outcome="passed",
+                    reason="Command completed successfully",
+                    output=output[-12000:],
+                    error=None,
+                )
+            # Success applies only to the recorded scope; effect gates require full.
             ok, error = True, None
+            outcome, reason = "passed", "All selected checks passed"
         except (Conflict, ProcessBarrierError):
             # Stale claims and uncertain cleanup cannot become verification results.
             raise
         except (
             RuntimeError,
+            OSError,
             subprocess.TimeoutExpired,
             verification_identity.VerificationIdentityError,
         ) as e:
             output, ok, error = str(e), False, type(e).__name__
+            outcome = (
+                e.outcome
+                if isinstance(e, verification_outcomes.VerificationOutcomeError)
+                else "inconclusive"
+            )
+            reason = str(e)
+            if checks and not checks[-1]["ok"]:
+                checks[-1].update(
+                    outcome=outcome, reason=reason, output=output[-12000:], error=error
+                )
+                output = checks[-1]["stage"] + " failed: " + output[-10000:]
         try:
-            after = verification_identity.capture(self.config, workspace, environment)
+            after = verification_identity.capture(self.config, workspace, environment, scope=scope)
             if not verification_identity.matches(identity, after):
                 output = (output + "\nVerification inputs changed during execution").strip()
                 ok, error = False, "VerificationIdentityError"
+                outcome, reason = "inconclusive", "Verification inputs changed during execution"
         except verification_identity.VerificationIdentityError as e:
             output = (output + "\n" + str(e)).strip()
             ok, error = False, type(e).__name__
+            outcome, reason = "inconclusive", str(e)
         try:
             require_clean(workspace, head)
         except Conflict as e:
             output = (output + "\n" + str(e)).strip()
             ok, error = False, str(e)
+            outcome, reason = "inconclusive", str(e)
         record = {
             "head": head,
             "tree": tree,
             "key": key,
             "command": self.config["verify"],
             "identity": identity,
+            "scope": scope,
             "logReference": log_reference,
+            "checks": checks,
             "ok": ok,
+            "outcome": outcome,
+            "reason": reason,
             "output": output[-12000:],
             "error": error,
             "at": started,
@@ -243,7 +322,7 @@ class Engine:
             revision / "track.html" if "presentation" in doc else revision.with_suffix(".md")
         )
         doc.pop("presentation", None)
-        return {
+        context = {
             "task": {k: task[k] for k in ("id", "kind", "purpose", "attempt")},
             "document": doc,
             "head": t["head"],
@@ -264,7 +343,8 @@ class Engine:
                 t["id"],
                 json.loads(t["verification"]) if t["verification"] else None,
             ),
-            "review": json.loads(t["review"]) if t["review"] else None,
+            "evidence_artifacts": condition_evidence.available(self.store.path, t),
+            "review": condition_evidence.review_view(self.store.path, t),
             "landing": json.loads(t["landing"]) if t["landing"] else None,
             "recent_results": [
                 json.loads(r["body"])
@@ -280,6 +360,26 @@ class Engine:
                 if json.loads(f["body"]).get("target") == t["id"]
             ],
         }
+        if task["kind"] == "review":
+            # Role and attempt come from stored records, never from a result's claims.
+            tasks = {w["id"]: w for w in snap["tasks"] if w["track"] == t["id"]}
+            records = [
+                {
+                    "result_id": r["id"],
+                    "task_id": r["task"],
+                    "kind": tasks[r["task"]]["kind"],
+                    "attempt": r["attempt"],
+                    "created": r["created"],
+                    "body": json.loads(r["body"]),
+                }
+                for r in sorted(snap["results"], key=lambda r: (r["created"], r["id"]))
+                if r["task"] in tasks
+            ]
+            del context["recent_results"]
+            # Implementation activity must not evict earlier independent assessments.
+            context["prior_reviews"] = [r for r in records if r["kind"] == "review"]
+            context["supplementary_results"] = [r for r in records if r["kind"] != "review"][-6:]
+        return context
 
     def record_review(self, task, result, expected_head=None):
         proposal_application.require_clear(self, task["track"])
@@ -305,6 +405,9 @@ class Engine:
             raise ValueError("Review verdict required")
         if verdict == "met" and any(x["verdict"] != "met" for x in rows):
             raise ValueError("Contradictory review")
+        if verdict == "met":
+            require_current(self.config, t["workspace"], t["head"], t["verification"])
+        condition_evidence.require_rows(self.store.path, t, rows)
         review = {
             "head": t["head"],
             "documentRevision": t["revision"],
@@ -334,6 +437,14 @@ class Engine:
         ):
             raise Conflict("Current independent review is missing or not met")
         require_current(self.config, t["workspace"], t["head"], t["verification"])
+        try:
+            condition_evidence.require_rows(
+                self.store.path,
+                t,
+                review.get("conditions", []) + review.get("additional_assessments", []),
+            )
+        except ValueError as error:
+            raise Conflict(str(error)) from error
         return t
 
     def land(self, task):
@@ -370,6 +481,7 @@ class Engine:
             integration = self.store.path / "integrations" / task["attempt"]
             with file_lock(self.store.path / "locks/git-metadata.lock", blocking=True):
                 command(["git", "worktree", "add", "--detach", str(integration), base], self.root)
+                created = checkout_identity(integration)
             try:
                 command(["git", "merge", "--no-ff", "--no-edit", t["head"]], integration)
             except RuntimeError as e:
@@ -378,11 +490,26 @@ class Engine:
                 return integration_repair.request_repair(
                     self, task, integration, base, "Integration conflict: " + str(e)
                 )
+            clean_integration.capture(self.store, t, task, integration, base, created)
             verification = self.verify(task, integration)
             # Combined verification belongs to the integration, not the candidate head.
             combined = verification
             self.update(task, verification=t["verification"])
-            if not combined["ok"]:
+            if not verification_outcomes.passed(combined):
+                if verification_outcomes.outcome(combined) == "inconclusive":
+                    detail = combined.get("reason") or combined.get("output", "")
+                    return {
+                        "summary": "Combined verification inconclusive: " + detail,
+                        "question": "Combined verification could not establish a product result. "
+                        "Candidate HEAD "
+                        + t["head"]
+                        + " and its review are preserved. Inspect integration "
+                        + str(integration)
+                        + " and verification evidence in attempts/"
+                        + task["attempt"]
+                        + "/verification.json. Which environment/check recovery is authorized "
+                        "before retrying landing for this candidate? Cause: " + detail,
+                    }
                 return integration_repair.request_repair(
                     self,
                     task,
@@ -551,16 +678,8 @@ class Engine:
                     result = self.complete(task)
                 elif task["kind"] == "verify":
                     v = self.verify(task, workspace)
-                    result = {
-                        "summary": "Verification " + ("passed" if v["ok"] else "failed"),
-                        "next": [
-                            {
-                                "kind": "review" if v["ok"] else "work",
-                                "purpose": "Assess current goal" if v["ok"] else v["output"],
-                            }
-                        ],
-                    }
-                    if v["ok"]:
+                    result = verification_outcomes.followup(v)
+                    if verification_outcomes.passed(v):
                         self.publish(task, workspace, doc)
                 else:
                     repair = (
@@ -572,7 +691,9 @@ class Engine:
                     if repair:
                         context["integration_repair"] = repair
                     if task["kind"] == "review":
-                        require_clean(workspace, context["head"])
+                        require_current(
+                            self.config, workspace, context["head"], context["verification"]
+                        )
                     if recovered:
                         result = dict(
                             recovered["intent"]["result"]
@@ -625,15 +746,20 @@ class Engine:
                             expected_head=context["head"],
                             result=result,
                         )
-                    if result.get("verify") or result.get("publish") or result.get("changes"):
-                        v = self.verify(task, workspace)
-                        if not v["ok"]:
-                            result = {
-                                "summary": "Verification failed after proposal: " + v["output"],
-                                "next": [
-                                    {"kind": "work", "purpose": "Fix verification: " + v["output"]}
-                                ],
-                            }
+                    final_requested = bool(
+                        result.get("verify")
+                        or result.get("publish")
+                        or any(
+                            row["kind"] in ("review", "land", "complete")
+                            for row in (result.get("next") or [])
+                        )
+                    )
+                    if final_requested or result.get("changes"):
+                        v = self.verify(
+                            task, workspace, scope="full" if final_requested else "partial"
+                        )
+                        if not verification_outcomes.passed(v):
+                            result = verification_outcomes.followup(v)
                         elif result.get("publish"):
                             self.publish(task, workspace, doc)
                     if task["kind"] == "review":

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .adapters import command
 from .engine import Engine
-from .language import select_language
+from .language import LANGUAGES, select_language
 from .release import VERSION, CONTRACTS, check_config, project_compatibility
 from .maintenance import runtime_guard
 from .store import Conflict, Store, encode, fingerprint
@@ -47,6 +47,12 @@ def initialize(args):
     }
     if args.verify_identity is not None:
         config["verify_identity"] = json.loads(args.verify_identity)
+    if args.verify_preflight is not None:
+        config["verify_preflight"] = json.loads(args.verify_preflight)
+    if args.verify_related is not None:
+        config["verify_related"] = json.loads(args.verify_related)
+    if args.verify_concurrency is not None:
+        config["verify_concurrency"] = args.verify_concurrency
     check_config(config)
     store = Store(args.state or repo / "todo")
     store.configure(config)
@@ -58,11 +64,22 @@ def parser():
     p.add_argument("--version", action="version", version=f"%(prog)s {VERSION}")
     p.add_argument("--state", help="Project state directory (default: todo)")
     sub = p.add_subparsers(dest="command", required=True)
+    stop = sub.add_parser("worker-stop", help="Read process and proposal evidence for one attempt")
+    stop.add_argument("track")
+    stop.add_argument("attempt")
     i = sub.add_parser("init")
     i.add_argument("--repo", required=True)
     i.add_argument("--github")
     i.add_argument("--base", default="main")
     i.add_argument("--verify", required=True, help="JSON command argv, never a shell string")
+    i.add_argument(
+        "--verify-preflight",
+        help="Optional JSON array of argv arrays, run in order before the full verifier",
+    )
+    i.add_argument(
+        "--verify-related",
+        help="Optional JSON array of argv arrays for intermediate changes only",
+    )
     i.add_argument(
         "--verify-identity",
         help="JSON declaration with version=1, files, environment variable names, and nonce",
@@ -96,8 +113,13 @@ def parser():
     )
     i.add_argument("--verify-timeout", type=int, default=180)
     i.add_argument(
+        "--verify-concurrency",
+        type=int,
+        help="Positive verification command limit shared by drivers using this state",
+    )
+    i.add_argument(
         "--language",
-        choices=["en", "ko"],
+        choices=list(LANGUAGES),
         help="Primary language; prompts in a terminal, otherwise defaults to en",
     )
     r = sub.add_parser("register", help="Agent-only track registration; no dashboard authoring")
@@ -117,6 +139,11 @@ def parser():
     tr.add_argument("--request-only", action="store_true")
     tr.add_argument("--request-id")
     tr.add_argument(
+        "--worker-attempt-limit",
+        type=int,
+        help="Persist a positive per-track request limit; omitted means unlimited",
+    )
+    tr.add_argument(
         "--no-auto-cleanup",
         action="store_true",
         help="Keep completed run resources for this driver",
@@ -127,12 +154,31 @@ def parser():
     st = sub.add_parser("start")
     st.add_argument("tracks", nargs="+")
     st.add_argument("--request-id")
+    st.add_argument(
+        "--worker-attempt-limit",
+        type=int,
+        help="Persist a positive per-track request limit; omitted means unlimited",
+    )
+    for execution_parser in (tr, st):
+        execution_parser.add_argument(
+            "--worker-mode",
+            choices=("auto", "codex-only", "claude-only"),
+            help="Persist this request's provider boundary; omission preserves its selection",
+        )
+        execution_parser.add_argument(
+            "--worker-roles", type=Path, help="JSON file of role -> provider/model/effort/basis"
+        )
     for name in ["pause", "resume", "cancel"]:
         c = sub.add_parser(name)
         c.add_argument("track")
     a = sub.add_parser("answer")
     a.add_argument("decision")
     a.add_argument("--text", required=True)
+    a.add_argument(
+        "--additional-worker-attempts",
+        type=int,
+        help="Approve a positive increment when answering a worker budget decision",
+    )
     run = sub.add_parser("run")
     run.add_argument("--jobs", type=int, default=2)
     run.add_argument("--max-tasks", type=int, default=100)
@@ -148,7 +194,7 @@ def parser():
     sub.add_parser("status")
     launch = sub.add_parser("launch-status", help="Read the latest task launcher selection")
     launch.add_argument("task")
-    launch.add_argument("--language", choices=["en", "ko"], help="Default: project language")
+    launch.add_argument("--language", choices=list(LANGUAGES), help="Default: project language")
     sub.add_parser("picks")
     sub.add_parser("doctor")
     sub.add_parser("reconcile")
@@ -166,8 +212,15 @@ def parser():
     install = sub.add_parser("install-skills")
     install.add_argument("--target", required=True)
     install.add_argument(
+        "--alias",
+        action="append",
+        default=[],
+        metavar="ROLE=NAME",
+        help="Use an unused entrypoint only for an occupied, unowned skill role; repeat as needed",
+    )
+    install.add_argument(
         "--language",
-        choices=["en", "ko"],
+        choices=list(LANGUAGES),
         help="Use the project language, or choose one for standalone skills",
     )
     update = sub.add_parser("update-skills", help="Plan/apply a safe project skill update")
@@ -181,6 +234,17 @@ def parser():
     restore.add_argument("--recover", action="store_true")
     check = sub.add_parser("compatibility", help="Inspect engine and project format compatibility")
     check.add_argument("--target", help="Also check this installed skill bundle")
+    diag = sub.add_parser("diagnose-versions", help="Read-only version inventory and update plan")
+    diag.add_argument("--target", help="Installed project skill directory to inspect")
+    diag.add_argument("--wheel", help="Local release wheel to evaluate; never installed")
+    diag.add_argument(
+        "--dashboard",
+        action="append",
+        default=[],
+        metavar="URL",
+        help="Loopback dashboard URL; repeat as needed",
+    )
+    diag.add_argument("--json", action="store_true", help="Print the structured result")
     upgrade = sub.add_parser(
         "upgrade", help="Guarded uv tool update from an explicit local release wheel"
     )
@@ -226,8 +290,18 @@ def dispatch(args):
                     install=args.command == "install-skills",
                     dry_run=getattr(args, "dry_run", False),
                     adopt=getattr(args, "adopt", False),
+                    aliases=skill_updates.parse_aliases(getattr(args, "alias", [])),
                 )
             print(encode(result))
+            return
+        if args.command == "worker-stop":
+            from .worker_stop import worker_stop_summary
+
+            print(
+                encode(
+                    worker_stop_summary(args.state or Path.cwd() / "todo", args.track, args.attempt)
+                )
+            )
             return
         store = Store(args.state or Path.cwd() / "todo")
         store.config()
@@ -252,12 +326,23 @@ def dispatch(args):
             result = store.register(document, args.expected_revision)
             result["document"] = str(store.path / "tracks" / document["id"] / "track.html")
         elif args.command in ("start", "trackrun"):
+            if args.worker_attempt_limit is not None:
+                store.positive_limit(args.worker_attempt_limit)
             if args.command == "trackrun" and (args.jobs < 1 or args.max_tasks < 1):
                 raise ValueError("jobs and max-tasks must be positive")
+            worker_roles = (
+                json.loads(args.worker_roles.read_text()) if args.worker_roles is not None else None
+            )
             result = {}
             for track in args.tracks:
                 try:
-                    result[track] = store.start(track, args.request_id)
+                    result[track] = store.start(
+                        track,
+                        args.request_id,
+                        worker_limit=args.worker_attempt_limit,
+                        worker_mode=args.worker_mode,
+                        worker_roles=worker_roles,
+                    )
                 except (ValueError, Conflict) as e:
                     result[track] = {"error": str(e)}
             if args.command == "trackrun" and not args.request_only:
@@ -267,12 +352,15 @@ def dispatch(args):
                     engine.config["worker_launcher"] = args.launcher
                 if args.no_auto_cleanup:
                     engine.config["cleanup_on_complete"] = False
-                result = {"tasks": engine.run(args.jobs, args.max_tasks)}
+                result = {
+                    "tasks": engine.run(args.jobs, args.max_tasks),
+                    "budgets": store.budget_status(),
+                }
         elif args.command in ("pause", "resume", "cancel"):
             result = store.control(args.track, args.command)
         elif args.command == "answer":
-            store.answer(args.decision, args.text)
-            result = {"answered": args.decision}
+            budget = store.answer(args.decision, args.text, args.additional_worker_attempts)
+            result = {"answered": args.decision, "budget": budget}
         elif args.command == "run":
             if args.jobs < 1 or args.max_tasks < 1:
                 raise ValueError("jobs and max-tasks must be positive")
@@ -281,7 +369,10 @@ def dispatch(args):
                 engine.config["worker_launcher"] = args.launcher
             if args.no_auto_cleanup:
                 engine.config["cleanup_on_complete"] = False
-            result = {"tasks": engine.run(args.jobs, args.max_tasks, args.daemon)}
+            result = {
+                "tasks": engine.run(args.jobs, args.max_tasks, args.daemon),
+                "budgets": store.budget_status(),
+            }
         elif args.command == "status":
             result = store.snapshot()
         elif args.command == "launch-status":
@@ -414,8 +505,10 @@ def dispatch(args):
 
 
 def skill_context(args):
+    from .skill_updates import project_contexts
+
     target = Path(args.target).resolve()
-    contexts = [json.loads(p.read_text()) for p in target.glob("*/project.json")]
+    contexts = project_contexts(target, recover=getattr(args, "recover", False))
     inferred_states = {c["state"] for c in contexts if c.get("state")}
     if args.state:
         state = Path(args.state).resolve()
@@ -451,6 +544,13 @@ def skill_context(args):
 def main(argv=None):
     args = parser().parse_args(argv)
     try:
+        if args.command == "diagnose-versions":
+            # Read-only: no runtime lease, TODO_FLOW_HOME creation or project registration.
+            from .version_diagnostics import diagnose, render
+
+            result = diagnose(args.state, args.target, args.wheel, args.dashboard)
+            print(encode(result) if args.json else render(result))
+            return
         if args.command == "upgrade":
             from .engine_updates import launch
 

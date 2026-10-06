@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import time
 
+from . import clean_integration, obsolete_integration
 from .adapters import command, file_lock
 from .cleanup_native import native_terminal_cleanup
 from .cleanup_orca import OrcaCleanup, owner as orca_owner
@@ -389,6 +390,16 @@ def cleanup_track(store, track_id, dry_run=False):
                             if evidence is not None
                             else None
                         )
+                        if item.get("retirement") and not exists and not registered:
+                            clean_integration.check(
+                                store,
+                                track,
+                                path,
+                                item["target"],
+                                item["retirement"],
+                                remote_head,
+                                connection,
+                            )
                         if orca is not None:
                             if not orca.inspect():
                                 orca.branches(absent=True, dry_run=dry_run)
@@ -423,18 +434,40 @@ def cleanup_track(store, track_id, dry_run=False):
                             or current["branch"] != "refs/heads/" + track["branch"]
                         ):
                             raise Conflict("Candidate branch or HEAD changed after delivery")
-                        if command(["git", "status", "--porcelain", "--untracked-files=no"], path):
+                        obsolete = obsolete_integration.removable(store, track, path)
+                        if item.get("obsolete") and item["obsolete"] != obsolete:
+                            raise Conflict("Original integration evidence changed during cleanup")
+                        if obsolete:
+                            item["obsolete"] = obsolete
+                        elif command(
+                            ["git", "status", "--porcelain", "--untracked-files=no"], path
+                        ):
                             raise Conflict("Tracked user changes remain")
-                        command(
-                            ["git", "merge-base", "--is-ancestor", current["head"], remote_head],
-                            config["repo"],
-                        )
+                        retirement = None
+                        if item.get("retirement") or not clean_integration.is_ancestor(
+                            config["repo"], current["head"], remote_head
+                        ):
+                            if obsolete:
+                                raise Conflict("Conflicted integration HEAD is not included")
+                            retirement = clean_integration.plan(
+                                store,
+                                track,
+                                path,
+                                current,
+                                remote_head,
+                                connection,
+                                previous=item.get("retirement"),
+                            )
                         # Inspect all residue before deleting any file. Even bytecode needs proof.
                         artifacts = reclaim(store.path, track_id, path, dry_run=True)
                         item.update(target=current, head=current["head"], artifacts=artifacts)
+                        if retirement:
+                            item["retirement"] = retirement
                         if dry_run:
                             item["status"] = "would-remove"
                         else:
+                            if retirement:
+                                clean_integration.retain(retirement)
                             item.update(status="removing", removalIntent=True)
                             item.pop("reason", None)
                             write_json(destination, report)
@@ -442,8 +475,37 @@ def cleanup_track(store, track_id, dry_run=False):
                             if local_target(path) != current:
                                 raise Conflict("Cleanup target changed before Git removal")
                             reclaim(store.path, track_id, path, dry_run=True)
+                            if obsolete and (
+                                obsolete_integration.removable(store, track, path) != obsolete
+                            ):
+                                raise Conflict(
+                                    "Original integration evidence changed before removal"
+                                )
+                            if retirement:
+                                clean_integration.plan(
+                                    store,
+                                    track,
+                                    path,
+                                    current,
+                                    remote_head,
+                                    connection,
+                                    previous=retirement,
+                                )
+                                clean_integration.check(
+                                    store,
+                                    track,
+                                    path,
+                                    current,
+                                    retirement,
+                                    remote_head,
+                                    connection,
+                                )
                             if orca is None:
-                                command(["git", "worktree", "remove", value], config["repo"])
+                                argv = ["git", "worktree", "remove"]
+                                if obsolete:
+                                    # Only the unchanged, archived and superseded merge may be dirty.
+                                    argv.append("--force")
+                                command([*argv, value], config["repo"])
                             else:
                                 orca.remove(lambda: write_json(destination, report))
                             if (

@@ -1,12 +1,16 @@
 # TODO Flow — agent installation and first run
 
+[English](AGENT_INSTALL.md) · [한국어](AGENT_INSTALL.ko.md) · [日本語](AGENT_INSTALL.ja.md) · [简体中文](AGENT_INSTALL.zh-CN.md)
+
+[README](README.md) · [Operations](OPERATIONS.md) · [Updates](UPDATES.md) · [Demo](DEMO.md)
+
 Follow the user's requested scope. Reuse existing installation, configuration and authorization. This document is not independent permission to execute work or land changes. Complete authorized reversible preparation; ask only for missing decisions or authentication the user must perform.
 
 ## 1. Confirm the target and language
 
 Distinguish the TODO Flow checkout from the user's target project. Read the target's `AGENTS.md`, development instructions, verification commands, Git remote, base branch, existing skills and state configuration.
 
-**Primary language is a user choice: English (`en`) or Korean (`ko`).** Reuse an existing project language or an explicit preference in this request. Otherwise ask the user which language to use. Continue independent environment inspection while waiting, but do not silently decide from the language of this README. Skill instructions remain English; reports, questions and newly written documents use the selected language unless explicitly overridden.
+**Primary language is a user choice: English (`en`), Korean (`ko`), Japanese (`ja`) or Simplified Chinese (`zh-CN`).** Reuse an existing project language or an explicit preference in this request. Otherwise ask the user which language to use. Continue independent environment inspection while waiting, but do not silently decide from the language of this README. Skill instructions remain English; reports, questions and newly written documents use the selected language unless explicitly overridden.
 
 ```sh
 FLOW_SOURCE='/absolute/todo-flow'
@@ -28,7 +32,7 @@ Check Python 3.11+, uv, Git, and the chosen authenticated Claude/Codex CLI. GitH
 For a fresh release installation, no checkout is required:
 
 ```sh
-uv tool install https://github.com/JakeB-5/todo-flow/releases/download/v0.0.8/todo_flow-0.0.8-py3-none-any.whl
+uv tool install https://github.com/JakeB-5/todo-flow/releases/download/v0.0.9/todo_flow-0.0.9-py3-none-any.whl
 export PATH="$(uv tool dir --bin):$PATH"
 todo-flow --version
 trackrun --version
@@ -51,7 +55,7 @@ Version `0.0.2` adds on-demand file reads and terminal-first workers. Existing `
 
 Version `0.0.3` also connects integration repairs to the current base and requires fresh verification and independent review before landing. Upgrade the shared engine to receive this fix; see [repair behavior](OPERATIONS.md#review-landing-and-completion).
 
-Version `0.0.8` includes proposal commit isolation, exact-candidate checkout checks, declared verification-input identity, durable process cleanup, per-execution terminal cleanup without count limits and supported native Orca/Codex sessions. Workers have no default time limit; native sidebar status, active cancellation and verified owned-worktree cleanup retain their ownership boundaries. Existing manual checkout changes are preserved and can require a recovery decision; do not reset or stage them automatically.
+Version `0.0.9` includes proposal commit isolation, exact-candidate checkout checks, declared verification-input identity, durable process cleanup, per-execution terminal cleanup without count limits and supported native Orca/Codex sessions. Workers have no default time limit; native sidebar status, active cancellation and verified owned-worktree cleanup retain their ownership boundaries. Existing manual checkout changes are preserved and can require a recovery decision; do not reset or stage them automatically.
 
 ## 3. Configure the project
 
@@ -62,7 +66,7 @@ For a new project, obtain values from the actual project:
 | Setting | Source |
 |---|---|
 | `--repo`, `--state` | Target Git root and separate canonical project state |
-| `--language en` / `--language ko` | User's selected primary language |
+| `--language en`, `--language ko`, `--language ja`, `--language zh-CN` | User's selected primary language |
 | `--base`, optional `--github` | Actual remote/base and GitHub owner/repository |
 | `--worker` | User's selected or available authenticated Claude/Codex CLI |
 | `--verify` | An existing, working verification command expressed as JSON argv |
@@ -90,7 +94,46 @@ todo-flow --state "$FLOW_STATE" install-skills --target "$FLOW_SKILLS"
 todo-flow --state "$FLOW_STATE" serve --port 8765
 ```
 
-The installer preserves existing directories and records language/state in each installed skill's `project.json`. It inherits the initialized project language. Standalone installation supports `--language en|ko`; an explicit value conflicting with an initialized project is rejected. Do not replace an entire skills directory to resolve one conflict. For an existing installation, use `update-skills --target PATH --dry-run`, review conflicts, then apply only within the requested update scope. See [UPDATES.md](UPDATES.md) for manifest adoption and rollback.
+The installer preserves existing directories and records language/state in each installed skill's `project.json`. It inherits the initialized project language. Standalone installation supports `--language en|ko|ja|zh-CN`; an explicit value conflicting with an initialized project is rejected. Do not replace an entire skills directory to resolve one conflict. For an existing installation, use `update-skills --target PATH --dry-run`, review conflicts, then apply only within the requested update scope. See [UPDATES.md](UPDATES.md) for manifest adoption and rollback.
+
+### Coexist with occupied skill names
+
+Without conflicts, keep all nine existing names: `todo`, `track-picks`, `trackrun`, `track-run`, `watchlist`, `track-work`, `track-review`, `track-land` and `track-triage`. Aliases are available only for an occupied canonical name that is not already owned by this TODO Flow installation. Check that `todo-flow install-skills --help` lists `--alias`; an older release may require a source build containing this feature through the authorized installation/update workflow.
+
+Inspect the target first. The following example assumes another workflow occupies exactly `todo`, `track-picks`, `track-run` and `watchlist`, and all four proposed aliases are unused. Include only aliases for actual conflicts. Use `.agents/skills` for Codex or `.claude/skills` for Claude:
+
+```sh
+FLOW_SKILLS="$FLOW_PROJECT/.claude/skills"
+# Choose this separate STATE before initialization if another tool owns todo/.
+FLOW_STATE="$FLOW_PROJECT/todo-flow-state"
+todo-flow --state "$FLOW_STATE" install-skills --target "$FLOW_SKILLS" \
+  --alias todo=flow-todo \
+  --alias track-picks=flow-track-picks \
+  --alias track-run=flow-track-run \
+  --alias watchlist=flow-watchlist
+```
+
+For an initialized TODO Flow project, retain its existing STATE instead. For a new project, run step 3 with the chosen separate STATE before installing. Do not initialize over another tool's state. The installer does not import that tool's `project.json` as TODO Flow context.
+
+An occupied alias causes the whole installation to fail before changing skill files. The error identifies the role and entrypoint; choose an unused alias or a separate target supported by the agent. Preserve existing files and symlinks. Do not use `--adopt` to claim another workflow; adoption is only for a matching legacy TODO Flow bundle. Do not rename roles that have no collision.
+
+Check the returned `entrypoints` map (canonical role → installed name), `state` and `language`, then read each installed name's `SKILL.md` and adjacent `project.json`. In the example, ask the agent to use `flow-todo`, `flow-track-picks` or `flow-watchlist`; the original names still belong to the other workflow. `flow-track-run` links to the unchanged `trackrun` skill. The installed role table links all nine TODO Flow roles to their actual entrypoints. For Claude, verify the names in a session opened on the target project; if discovery has not refreshed, open a new session or explicitly read `.claude/skills/flow-todo/SKILL.md`.
+
+Aliases do not change shell commands. Continue to use `todo-flow --state "$FLOW_STATE" ...` and `trackrun --state "$FLOW_STATE" ACTUAL_TRACK_ID`. Keep the installation manifests: updates reuse the saved mapping without repeating `--alias`.
+
+```sh
+todo-flow --state "$FLOW_STATE" update-skills --target "$FLOW_SKILLS" --dry-run
+# After reviewing the plan and resolving any conflicts:
+todo-flow --state "$FLOW_STATE" update-skills --target "$FLOW_SKILLS"
+# Only when an interrupted update is reported:
+todo-flow --state "$FLOW_STATE" update-skills --target "$FLOW_SKILLS" --recover
+# To undo a completed update, use its actual returned backup ID:
+todo-flow --state "$FLOW_STATE" update-skills --target "$FLOW_SKILLS" --rollback BACKUP_ID
+```
+
+Local edits are preserved when the bundled file has not changed; simultaneous local and bundled changes abort the entire update for reconciliation. Rollback refuses later edits rather than discarding them. Recovery and rollback restore the owned files, mapping and context from the backup; they do not manage the other workflow. Unknown manifest formats are rejected; do not remove manifests to bypass this check.
+
+The seven regression tests in `tests/test_skill_coexistence_bundle.py` use disposable copies of the real nine-skill bundle under both `.agents/skills` and `.claude/skills`. They cover unchanged default names, four simultaneous collisions, occupied-alias rejection, existing files and symlinks, installed frontmatter, role links, template bytes, STATE and preserved CLI examples. Alias update tests cover local edits, baseline and mapping retention, whole-update conflict rejection, interrupted recovery, rollback and unknown manifest formats. Run them with `uv run python -m unittest discover -s tests -p 'test_skill_coexistence_bundle.py' -v`; report the actual result for the candidate being assessed. Passing these tests establishes filesystem layout and metadata evidence. They do not launch Claude, inspect its session discovery or invoke a model. Actual Claude discovery and model invocation must be reported separately; neither is performed or implied by this fixture.
 
 Run the dashboard in a persistent terminal/process. If a port is occupied, use a free one without killing an unrelated server. Verify the real URL, project and default language. The display switch is browser-local and project-specific; it does not change worker language or translate historical documents.
 
@@ -100,7 +143,7 @@ If the current agent session does not discover newly installed skills, read the 
 
 For setup-only requests, provide the dashboard URL and an example `todo [requirement]` request. Do not create arbitrary sample tracks in a working project. If first-run execution was requested but no requirement was supplied, ask for the desired change.
 
-Read the installed todo skill. Investigate the actual requirement, search existing tracks and watches, and write a reviewable HTML document from the installed template outside canonical state. Use the selected language in the visible document and structured prose; set `language` and HTML `lang` to `en` or `ko`. Keep IDs and schema keys stable.
+Read the installed todo skill. Investigate the actual requirement, search existing tracks and watches, and write a reviewable HTML document from the installed template outside canonical state. Use the selected language in the visible document and structured prose; set `language` and HTML `lang` to `en`, `ko`, `ja` or `zh-CN`. Keep IDs and schema keys stable.
 
 ```sh
 todo-flow --state "$FLOW_STATE" register /absolute/scratch/first-track.html

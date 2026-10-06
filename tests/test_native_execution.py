@@ -13,6 +13,7 @@ from todo_flow.managed_workspace import receipt_path
 from todo_flow.native_worker import preflight
 from todo_flow.process_barrier import ProcessBarrier
 from todo_flow.worker import codex_schema, run_worker
+from todo_flow.worker_stop import worker_stop_summary
 from todo_flow.workspace_creation import WorkspaceCreationGate
 
 
@@ -232,6 +233,14 @@ class NativeExecutionTests(unittest.TestCase):
         self.prepare()
         result = self.execute()
         self.assertEqual(result["summary"], "합성 native worker")
+        summary = worker_stop_summary(self.s.path, self.task["track"], self.task["attempt"])
+        row = next(row for row in summary["executions"] if row["proposal"] is not None)
+        self.assertTrue(row["process"]["started"])
+        self.assertTrue(row["process"]["group_exit_confirmed"])
+        self.assertEqual(row["proposal"]["status"], "valid")
+        self.assertTrue(row["proposal"]["validated"])
+        self.assertEqual(row["receipts"]["native"]["record"]["status"], "complete")
+        self.assertIsNone(row["goal_success"])
         self.assertEqual(result["changes"][0]["content"], "# 한글 제안\n" * 20000)
         self.assertEqual((self.workspace / "calc.py").read_bytes(), self.before_source)
         folder = self.s.path / "attempts" / self.task["attempt"]
@@ -252,6 +261,38 @@ class NativeExecutionTests(unittest.TestCase):
             json.loads(line) for line in (self.fixture / "requests.jsonl").read_text().splitlines()
         ]
         self.assertEqual(sum(request["method"] == "turn/start" for request in requests), 1)
+
+    def test_role_selection_reaches_native_thread_and_turn_without_false_confirmation(self):
+        from todo_flow.worker_routing import request, resolve
+
+        self.prepare()
+        routing = request(
+            None,
+            {"worker": {"type": "codex", "model": "gpt-6.1-sol", "effort": "high"}},
+            {},
+            mode="codex-only",
+        )
+        routing["requestId"] = "native-routing"
+        self.task["worker_selection"] = resolve(routing, "work")
+        self.config["worker"] = {"type": "claude", "model": "must-not-run"}
+        self.execute()
+        requests = [
+            json.loads(line) for line in (self.fixture / "requests.jsonl").read_text().splitlines()
+        ]
+        thread = next(row["params"] for row in requests if row["method"] == "thread/start")
+        turn = next(row["params"] for row in requests if row["method"] == "turn/start")
+        self.assertEqual(thread["model"], "gpt-6.1-sol")
+        self.assertEqual(thread["config"]["model_reasoning_effort"], "high")
+        self.assertEqual(turn["model"], "gpt-6.1-sol")
+        self.assertEqual(turn["effort"], "high")
+        folder = self.s.path / "attempts" / self.task["attempt"]
+        record = json.loads((folder / "native-session.json").read_text())
+        self.assertEqual(record["selected"], {"model": "gpt-6.1-sol", "effort": "high"})
+        self.assertIsNone(record["model"])
+        self.assertEqual(record["provider_confirmed"], {"model": None, "effort": None})
+        selection = json.loads((folder / "worker-selection.json").read_text())
+        self.assertEqual(selection["selected"]["provider"], "codex")
+        self.assertEqual(selection["provider_confirmed"], record["provider_confirmed"])
 
     def test_thousands_of_deltas_do_not_delay_complete_proposal_adoption(self):
         self.prepare()
@@ -532,7 +573,14 @@ class NativeExecutionTests(unittest.TestCase):
         proposal.update(
             summary="Synthetic independent review",
             verdict="met",
-            conditions=[{"id": "sum", "verdict": "met", "evidence": "Synthetic fixture only"}],
+            conditions=[
+                {
+                    "id": "sum",
+                    "verdict": "met",
+                    "evidence": "Synthetic fixture only",
+                    "evidenceRefs": None,
+                }
+            ],
         )
         (self.fixture / "proposal.json").write_text(json.dumps(proposal))
         result = self.execute()

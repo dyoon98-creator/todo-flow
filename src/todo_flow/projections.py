@@ -4,8 +4,12 @@ import json
 import time
 import hashlib
 
+from . import condition_evidence
+from .delivery_display import delivery_summary, object_value
+from .language import LANGUAGES
 from .launch_display import describe_launch, read_launch
 from .verification_log_view import log_view, read_log_range
+from .worker_display import read_worker
 
 
 SUMMARY = """t.id,t.revision,t.status,t.control,t.issue,t.pr,t.updated,
@@ -21,7 +25,9 @@ SUMMARY = """t.id,t.revision,t.status,t.control,t.issue,t.pr,t.updated,
 # Legacy/free-form purposes remain available through task(), never sliced into summaries.
 TASK_SUMMARY = """id,track,kind,status,owner,lease,updated,
  CASE WHEN kind='work' AND substr(purpose,1,18)='Fix verification: '
- THEN 'verification-repair' ELSE NULL END AS intent"""
+ THEN 'verification-repair'
+ WHEN kind='assess' AND substr(purpose,1,23)='Diagnose verification: '
+ THEN 'verification-diagnosis' ELSE NULL END AS intent"""
 TASK_ORDER = (
     "CASE status WHEN 'running' THEN 0 WHEN 'waiting' THEN 1 "
     "WHEN 'queued' THEN 2 ELSE 3 END,created,id"
@@ -163,6 +169,7 @@ class Dashboard:
             c.execute("BEGIN")
             result = page(c, "SELECT " + SUMMARY, source, params, order, limit, offset)
             for t in result["items"]:
+                t["delivery"] = delivery_summary(self.store, c, t["id"])
                 t["selectable"] = t["status"] != "done" and t["control"] not in (
                     "active",
                     "paused",
@@ -184,24 +191,37 @@ class Dashboard:
         for key in ("document",):
             t[key] = json.loads(t[key])
         with self.store.connect() as c:
+            c.execute("BEGIN")
+            t["delivery"] = delivery_summary(self.store, c, id_)
             triage = c.execute(
                 "SELECT id,body,created FROM triages WHERE track=? ORDER BY created DESC LIMIT 1",
                 (id_,),
             ).fetchone()
-        t["triage"] = (
-            {"id": triage["id"], "at": triage["created"], **json.loads(triage["body"])}
-            if triage
-            else None
-        )
+        try:
+            t["triage"] = (
+                {"id": triage["id"], "at": triage["created"], **object_value(triage["body"])}
+                if triage
+                else None
+            )
+        except (ValueError, TypeError):
+            t["triage"] = None
         presentation = t["document"].pop("presentation", None)
         t["documentView"] = {
             "url": f"/documents/{id_}/{t['revision']}/index.html",
             "format": presentation["format"] if presentation else "markdown",
             "assets": len(presentation.get("assets", [])) if presentation else 0,
         }
+        # Recheck explicit references before displaying a current integrity assertion.
+        try:
+            review = condition_evidence.review_view(self.store.path, t)
+        except (ValueError, TypeError, AttributeError):
+            review = None
         # Heavy evidence is fetched only on demand, never shipped with a list or the initial detail.
         for key in ("verification", "review", "landing"):
-            value = json.loads(t[key]) if t[key] else None
+            try:
+                value = object_value(review if key == "review" else t[key])
+            except (ValueError, TypeError):
+                value = None
             t[key] = (
                 {
                     k: value[k]
@@ -224,9 +244,15 @@ class Dashboard:
             else:
                 logs = log_view(self.store.path, id_, value)
                 if value is not None or logs["latestExecution"] is not None:
-                    value = {**(value or {}), "logs": logs}
+                    value = {
+                        **(value or {}),
+                        "logs": logs,
+                        "evidenceArtifacts": condition_evidence.available(self.store.path, t),
+                    }
         elif params:
             raise ValueError("Log ranges require verification evidence")
+        elif kind == "review":
+            value = condition_evidence.review_view(self.store.path, t)
         return {"track": id_, "kind": kind, "value": value}
 
     def activity(self, limit=25, offset=0):
@@ -259,6 +285,9 @@ class Dashboard:
                   COALESCE(a.uncertain,0) AS uncertain,
                   COALESCE(d.decisions,0) AS decisions,
                   json_extract(t.verification,'$.ok') AS verificationOk,
+                  json_extract(t.verification,'$.outcome') AS verificationOutcome,
+                  json_extract(t.verification,'$.complete') AS verificationComplete,
+                  json_extract(t.verification,'$.cancelled') AS verificationCancelled,
                   json_extract(t.verification,'$.at') AS verificationAt,
                   CASE WHEN a.running>0 THEN 'running'
                     WHEN a.waiting>0 OR d.decisions>0 THEN 'waiting'
@@ -273,6 +302,7 @@ class Dashboard:
                 "SELECT COALESCE(SUM(a.task_count),0) " + source, (now,)
             ).fetchone()[0]
             for track in result["items"]:
+                track["delivery"] = delivery_summary(self.store, c, track["id"])
                 task = c.execute(
                     "SELECT "
                     + TASK_SUMMARY
@@ -283,6 +313,15 @@ class Dashboard:
                     (track["id"],),
                 ).fetchone()
                 track["current"] = dict(task) if task else None
+                if task:
+                    attempt = c.execute(
+                        "SELECT id FROM attempts WHERE task=?"
+                        " ORDER BY started DESC,id DESC LIMIT 1",
+                        (task["id"],),
+                    ).fetchone()
+                    track["current"]["worker"] = read_worker(
+                        self.store.path, attempt["id"] if attempt else None
+                    )
         result["observedAt"] = now
         return result
 
@@ -357,8 +396,8 @@ class Dashboard:
         launch = read_launch(self.store.path, a["id"] if a else None)
         record = launch["record"] or {}
         public = {}
-        if record.get("execution_mode") == "orca-native":
-            public["execution_mode"] = "orca-native"
+        if record.get("execution_mode") in ("orca-native", "orca-interactive"):
+            public["execution_mode"] = record["execution_mode"]
             for key in ("worktree", "session", "turn"):
                 if isinstance(record.get(key), str):
                     public[key] = record[key]
@@ -368,6 +407,7 @@ class Dashboard:
         return {
             "task": dict(w),
             "attempt": dict(a) if a else None,
+            "worker": read_worker(self.store.path, a["id"] if a else None),
             "result": json.loads(r["body"]) if r else None,
             # Expose runtime labels and explicitly selected resource identifiers only.
             "launch": {
@@ -376,7 +416,7 @@ class Dashboard:
                 "evidence": launch["evidence"],
                 "summaries": {
                     language: describe_launch(launch["record"] or {}, language)
-                    for language in ("en", "ko")
+                    for language in LANGUAGES
                 },
             },
         }

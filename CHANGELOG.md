@@ -2,6 +2,39 @@
 
 User-visible behavior, compatibility, important fixes and repository changes. The first public release is `0.0.1`, distributed through GitHub Releases.
 
+## 0.1.1 — 2026-10-04
+
+- Distinguish a newly prepared merge from a completed no-op proposal receipt, preserving both merge parents and idempotent retries after restart.
+- Retire superseded owned clean integration checkouts only when their contents and original parents are included in the confirmed landing. Preserve a recoverable commit reference, ownership evidence and interrupted-removal receipts; retain changed or uncertain resources.
+- Isolate test runtime homes, registration, locks and child processes from the real installation, including interrupted tests and failed fixture setup. Preserve real update exclusion checks.
+- Keep state/configuration formats and worker/skill protocols unchanged. No data migration is required.
+
+## 0.1.0 — 2026-10-04
+
+- Provide English, Korean, Japanese and Simplified Chinese dashboard labels and core guides, with project-isolated language preferences and preserved navigation, drafts and authored content.
+- Add persistent light/dark theme selection and readable dashboard surfaces without rewriting authored documents.
+- Show each worker attempt's selected and confirmed model/reasoning effort, distinguishing delegation, missing records and unreadable evidence.
+- Support role-based worker profiles and mixed, Codex-only and Claude-only routing with durable selection provenance.
+- Separate inconclusive verification from declared implementation failure so environment/check failures do not automatically request speculative code changes.
+- Give independent reviewers explicit source provenance and distinguish confirmed facts from implementer claims. Add public examples and offline quality cases based on independently specified expectations and counterexamples.
+- Preserve existing Claude/Codex skill installations, project bindings and local edits during coexistence-aware installation and updates.
+- Defer follow-up claims until the previous execution releases its track lock; retain execution ownership checks and deterministic handoff/cancellation regressions.
+- Document how to reuse confirmed feedback with its source, scope, counterexample and regression evidence without expanding authorized work.
+- Keep state/configuration formats and worker/skill protocols unchanged. No data migration is required.
+
+Known recovery limits: historical identical no-op proposal journals and superseded synthetic integration commits outside the landed ancestry can still require evidence-preserving manual recovery.
+
+## 0.0.9 — 2026-10-01
+
+- Run explicitly configured preflight checks before the full verifier, stopping on the first failure and retaining each command's original logs.
+- Support related checks for intermediate changes while requiring full verification for publication, independent review, landing and completion. Bind verification scope and the ordered policy to candidate identity and cache eligibility.
+- Validate supplied machine evidence against the condition ID, document revision, candidate HEAD, verification execution and original artifact digest. Preserve prose-only evidence and keep artifact integrity separate from semantic condition satisfaction.
+- Record worker termination and proposal parsing/validation separately, retain original failure evidence and expose read-only inspection through `todo-flow worker-stop`.
+- Support explicit request-scoped worker attempt limits with durable usage, decision waits and authorized increments; restarting a driver does not reset the limit.
+- Reclaim obsolete failed integration checkouts after confirmed repair, preserving original evidence, ownership checks and later user changes. Require cleanup of run-owned resources before reporting trackrun completion.
+- Clarify disabled dashboard selection states and resuming paused work in the English and Korean guides.
+- Keep state/configuration formats and worker/skill protocols unchanged.
+
 ## 0.0.8 — 2026-09-30
 
 - Group Activity by track with current work, assignment and decision waits, recent verification results, and bounded task details. Preserve full instructions, evidence links and selection across Korean/English switching and reloads; mark stale or disconnected observations as needing confirmation.

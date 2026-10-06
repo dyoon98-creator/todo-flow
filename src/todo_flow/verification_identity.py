@@ -18,7 +18,12 @@ import os
 import stat
 from pathlib import Path
 
-from .release import VERIFICATION_IDENTITY_VERSION, validate_verify_identity
+from .release import (
+    VERIFICATION_IDENTITY_VERSION,
+    validate_verify_identity,
+    validate_verify_preflight,
+    validate_verify_related,
+)
 
 VERSION = VERIFICATION_IDENTITY_VERSION
 
@@ -93,13 +98,20 @@ def _file_identity(name, workspace):
     }
 
 
-def capture(config, workspace, environ=None):
+def capture(config, workspace, environ=None, *, scope="full"):
     """Capture evidence without storing selected environment values or nonce text.
 
     Read failures and unsupported formats fail closed. Callers must not fall back
     to the older HEAD/argv-only cache when capture fails.
     """
     declaration = validate(config)
+    try:
+        preflight = validate_verify_preflight(config)
+        related = validate_verify_related(config)
+    except ValueError as error:
+        raise VerificationIdentityError(str(error)) from error
+    if scope not in ("full", "partial"):
+        raise VerificationIdentityError("Unsupported verification scope")
     argv = config.get("verify")
     if (
         not isinstance(argv, list)
@@ -122,6 +134,10 @@ def capture(config, workspace, environ=None):
     return {
         "version": VERSION,
         "command": list(argv),
+        # No policy means the legacy full-only contract, even for an intermediate request.
+        **({"scope": scope, "policy": {"related": related}} if related else {}),
+        # Preserve identities for existing configurations with no preflight.
+        **({"preflight": preflight} if preflight else {}),
         "timeout": timeout,
         "files": files,
         "environment": [

@@ -9,11 +9,12 @@ from pathlib import Path
 from .store import encode
 from .maintenance import write_json
 from .terminal_release import retire_launch
-from .process_inventory import launch_identity
+from .worker_stop import WorkerObservation
 from .supervised_process import SupervisedProcess
 from .language import output_instruction
 from .launchers import LauncherUnavailable, TerminalProcess, select_launcher, spawn_terminal
 from .change_proposal import CHANGE_SCHEMA, validate_changes
+from .condition_evidence import REFERENCE_SCHEMA
 
 SCHEMA = {
     "type": "object",
@@ -56,6 +57,7 @@ SCHEMA = {
                     "id": {"type": "string"},
                     "verdict": {"type": "string", "enum": ["met", "unmet", "cannot-assess"]},
                     "evidence": {"type": "string"},
+                    "evidenceRefs": {"type": "array", "items": REFERENCE_SCHEMA},
                 },
                 "required": ["id", "verdict", "evidence"],
                 "additionalProperties": False,
@@ -136,6 +138,13 @@ a read-access boundary. Select relevant files and ranges rather than loading eve
 You have read-only tools. Do not write files, run mutating commands, commit, push or access the network.
 The host performs verification. Report precise paths/lines and missing information honestly.
 Tie every proposed change to a selected condition or an existing invariant affected by this change.
+For changed behavior, connect the condition ID, requirement or preserved behavior, concrete input,
+and expected result justified independently of the implementation. For a bug fix, use the same
+focused check to distinguish wrong and corrected behavior where practical. If an existing test
+expectation changes, report old/new results and the requirement or preservation evidence justifying
+that change for independent review; agreement with the implementation alone is insufficient.
+Existing method text, test comments or visible analysis suffice; no new metadata or behavior tests
+for every task are required. A copy-only edit may need only wording and rendered-context inspection.
 Complete the smallest working path that delivers that outcome, including required callers. A useful
 optional feature, unrelated observed defect or hypothetical risk does not expand this track. Record
 such observations as findings when useful; do not include them in changes or mandatory follow-up work.
@@ -154,6 +163,10 @@ The runtime applies changes, commits, executes configured verification and publi
 Choose only useful next work; do not follow a mandatory sequence. Most small work can be completed in
 one work task. An assess task should delegate concrete implementation to work; assess does not edit.
 A work task can return changes, verify:true, publish:true, next:[{kind:review,purpose:...}].
+verify:true requests final full verification. With configured verify_related checks, intermediate
+changes without verify/publish or a review/land/complete follow-up run only related checks (after
+configured preflight). Partial success cannot authorize publication, review, landing or completion.
+Request final verification when the candidate is ready; do not split finished work to use staging.
 When paths.integration_repair is present, read it and its base_diff path before proposing a repair.
 The host has merged
 the pinned latest base into your candidate checkout. Conflict markers are in workspace files;
@@ -167,6 +180,26 @@ Use investigation or focused followup work if uncertain. A question suspends wor
 Review is a FRESH READ-ONLY session: inspect goal, current files, exact diff and verification evidence;
 return verdict and EACH registered condition's id/verdict/evidence. Use only registered IDs in conditions;
 put additional observations in findings. Never self-approve or change files in review.
+For changed behavior, independently inspect the expectation source, concrete input and distinguishing
+counterexample against the condition. For changed test expectations, compare old/new results and
+assess the cited requirement or preservation evidence; a passing test or author claim alone does not
+justify the change. Use available before/after evidence without requiring tests for every task.
+For review, first assess paths.document, paths.decisions, the actual candidate and paths.diff,
+then paths.verification, paths.verification_logs and paths.evidence_artifacts. Preserve unresolved
+paths.findings and paths.incoming_findings. Read paths.review and paths.prior_reviews as previous
+assessments, checking their candidate/revision applicability rather than adopting their verdicts.
+paths.supplementary_results contains other task results, including implementation explanations and
+self-approval claims. Read it only as supplementary context after the primary evidence. Its stored
+result_id/task_id/kind/attempt/created identify provenance; body is not host-verified fact. Prior review
+bodies are also assessments, not proof. Missing required evidence permits cannot-assess; name the gap.
+This separates input provenance structurally; model bias reduction or quality improvement is unmeasured.
+Optional conditions[].evidenceRefs may explicitly bind a machine artifact to that condition.
+Read paths.evidence_artifacts for available sealed verification artifacts; copy an entry unchanged
+and add conditionId matching the condition row. Keep the evidence prose explaining relevance.
+References are checked against the current revision, HEAD, recorded execution, path and SHA-256.
+Missing/null/empty evidenceRefs means prose-only, including legacy evidence strings. The host's
+review view reports evidenceIntegrity as prose-only, integrity-checked or invalid. Integrity proves
+byte provenance only, never semantic correctness or that a condition is met. Judge those separately.
 Tie required review corrections to a selected condition and demonstrated failure or missing evidence
 for that condition. Preferred designs, unrelated defects and hypothetical hardening alone do not make
 it unmet. Use optional findings for those observations and proportionate verification for the change.
@@ -320,11 +353,21 @@ def worker_input(context, folder):
 
 
 def run_worker(config, context, task, state, heartbeat):
+    with WorkerObservation(task) as observation:
+        return _run_worker(config, context, task, state, heartbeat, observation)
+
+
+def _run_worker(config, context, task, state, heartbeat, observation):
     # Delivery uncertainty belongs to the task, regardless of the replacement
     # attempt's adapter, launcher or current native capability. Do not parse an
     # existing intent: even a malformed file or dangling symlink must block replay.
-    if task.get("id") and os.path.lexists(Path(state) / ("native-task-" + task["id"] + ".json")):
-        raise FileExistsError("Native task intent already exists; reconcile before retrying")
+    for prefix in ("native-task-", "interactive-task-"):
+        if task.get("id") and os.path.lexists(Path(state) / (prefix + task["id"] + ".json")):
+            raise FileExistsError("Native task intent already exists; reconcile before retrying")
+    from .worker_routing import apply, validate_adapter
+
+    config = apply(config, task.get("worker_selection"))
+    validate_adapter(config["worker"])
     adapter = config["worker"]
     if adapter["type"] == "command" and config.get("worker_protocol", 1) != 2:
         raise ValueError(
@@ -340,6 +383,18 @@ def run_worker(config, context, task, state, heartbeat):
     instructions = INSTRUCTIONS + "\n" + output_instruction(language)
     folder = Path(state).resolve() / "attempts" / task["attempt"]
     folder.mkdir(parents=True, exist_ok=True)
+    write_json(
+        folder / "worker-selection.json",
+        {
+            "selection": task.get("worker_selection"),
+            "selected": {
+                "provider": adapter["type"],
+                "model": adapter.get("model"),
+                "effort": adapter.get("effort"),
+            },
+            "provider_confirmed": None,
+        },
+    )
     context = worker_input(context, folder)
     (folder / "input.json").write_text(encode(context))
     if adapter["type"] == "claude":
@@ -367,6 +422,8 @@ def run_worker(config, context, task, state, heartbeat):
         ]
         if adapter.get("model"):
             args += ["--model", adapter["model"]]
+        if adapter.get("effort"):
+            args += ["--effort", adapter["effort"]]
     elif adapter["type"] == "codex":
         (folder / "schema.json").write_text(encode(codex_schema()))
         (folder / "input.json").write_text(
@@ -413,6 +470,8 @@ def run_worker(config, context, task, state, heartbeat):
             args += ["--disable", feature]
         if adapter.get("model"):
             args += ["--model", adapter["model"]]
+        if adapter.get("effort"):
+            args += ["-c", "model_reasoning_effort=" + json.dumps(adapter["effort"])]
     elif adapter["type"] == "command":
         args = adapter["argv"]
     else:
@@ -433,10 +492,26 @@ def run_worker(config, context, task, state, heartbeat):
     # Record selection before any launch. Selection is not proof of process start;
     # process ownership and cleanup remain the supervisor/bridge's responsibility.
     write_json(folder / "launch.json", {**launcher, "status": "selected"})
-    if adapter["type"] == "codex" and launcher["backend"] == "orca":
+    interactive = None
+    if adapter["type"] == "claude" and launcher["backend"] == "orca":
+        from .claude_session import prepare
+
+        prepared, reason = prepare(
+            config, context, task, state, folder, launcher, instructions, SCHEMA
+        )
+        if prepared is not None:
+            args, interactive = prepared["argv"], prepared["session"]
+        else:
+            launcher["selection"] = {
+                **launcher.get("selection", {}),
+                "reason": reason,
+                "execution_mode": "headless-compatibility",
+            }
+        write_json(folder / "launch.json", {**launcher, "status": "selected"})
+    elif adapter["type"] == "codex" and launcher["backend"] == "orca":
         from .native_worker import run_native
 
-        native = run_native(config, context, task, state, folder, launcher, heartbeat)
+        native = run_native(config, context, task, state, folder, launcher, heartbeat, observation)
         if native is not None:
             return native
     env = dict(os.environ)
@@ -453,7 +528,7 @@ def run_worker(config, context, task, state, heartbeat):
         if launcher["backend"] == "headless":
             proc = SupervisedProcess(
                 args,
-                identity=launch_identity(state, task),
+                identity=observation.launch(state),
                 stdin=inp,
                 stdout=out,
                 stderr=err,
@@ -469,7 +544,8 @@ def run_worker(config, context, task, state, heartbeat):
                 context["workspace"],
                 folder,
                 title,
-                launch_identity=launch_identity(state, task),
+                launch_identity=observation.launch(state),
+                **({"interactive": interactive} if interactive else {}),
             )
         try:
             while proc.poll() is None:
@@ -487,13 +563,21 @@ def run_worker(config, context, task, state, heartbeat):
                     retire_launch(folder)
             else:
                 proc.stop()
+    observation.phase = "decoding"
+    if interactive is not None:
+        from .claude_session import adopt
+
+        adopt(folder, context, task, state)
     if adapter["type"] == "codex":
         result = json.loads((folder / "final.json").read_text())
-        return validate({k: v for k, v in result.items() if v is not None}, task["kind"])
+        if isinstance(result, dict):
+            result = {k: v for k, v in result.items() if v is not None}
+        return observation.validate(result, task["kind"])
     output = (folder / "output.json").read_text()
     payload = result_payload(output) if adapter["type"] == "claude" else json.loads(output)
     if adapter["type"] == "claude":
         if payload.get("is_error"):
+            observation.phase = "provider"
             raise RuntimeError("Claude failed: " + str(payload.get("result")))
         result = payload.get("structured_output")
         if result is None:
@@ -503,4 +587,4 @@ def run_worker(config, context, task, state, heartbeat):
             result = json.loads(text)
     else:
         result = payload
-    return validate(result, task["kind"])
+    return observation.validate(result, task["kind"])

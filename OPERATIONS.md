@@ -1,6 +1,8 @@
 # Operating TODO Flow
 
-[Start here](README.md#quick-start) · [Agent installation](AGENT_INSTALL.md) · [한국어](README.ko.md)
+[English](OPERATIONS.md) · [한국어](OPERATIONS.ko.md) · [日本語](OPERATIONS.ja.md) · [简体中文](OPERATIONS.zh-CN.md)
+
+[Start here](README.md#quick-start) · [Agent installation](AGENT_INSTALL.md) · [Updates](UPDATES.md) · [Demo](DEMO.md)
 
 ## Project state and language
 
@@ -15,7 +17,7 @@ todo-flow serve --port 8765
 trackrun --state /absolute/project/todo TRACK_ID_1
 ```
 
-`init --language en|ko` persists the primary language in `config/1.json`. Interactive setup prompts when the flag is omitted; unattended setup defaults to English. Agent-assisted setup asks the user if no preference or existing configuration is available. Older configurations without the field default to English.
+`init --language en|ko|ja|zh-CN` persists the primary language in `config/1.json`. Interactive setup prompts when the flag is omitted; unattended setup defaults to English. Agent-assisted setup asks the user if no preference or existing configuration is available. Older configurations without the field default to English.
 
 Skills are written in English and use the primary language for new documents and user-facing explanations. Installed `project.json` identifies their project state and language. Built-in worker adapters receive the same language instruction; custom adapters receive `language` and `output_language_instruction` in their input. Schema keys, IDs, commands, code conventions and original source quotations stay unchanged.
 
@@ -82,7 +84,11 @@ Multiple drivers do not share a global concurrency budget. A dead driver or expi
 
 This section describes `0.0.2`; the published `0.0.1` wheel retains snapshot workers. Workers now start in the assigned implementation/review checkout, or the exact fetched-base checkout for triage. Input contains the task, workspace, head, language, exploration hints, write boundaries and a `paths` map. Goal/conditions, the rich track document, full diff, verification, decisions, prior results and triage evidence are read by path. Project source is not collected into stdin, and there is no aggregate 150 KB source limit. Model context limits still apply to selected reads.
 
-Codex uses read-only shell tools (including `rg`); Claude exposes Read, Glob and Grep. `context_patterns` / `--context` are navigation hints, not read-access controls. Run with the access appropriate to your project. Workers return JSON proposals; the engine still applies authorized writes, runs verification, commits and handles remote effects. These are automatic workers with live logs, not interactive agent chats.
+Codex uses read-only shell tools (including `rg`); Claude exposes Read, Glob and Grep. `context_patterns` / `--context` are navigation hints, not read-access controls. Run with the access appropriate to your project. Workers return JSON proposals; the engine still applies authorized writes, runs verification, commits and handles remote effects. On supported Orca routes, workers use visible sessions bound to their managed worktrees. Compatibility command workers show live logs. Both return proposals through the host; a visible terminal does not authorize extra writes or prompts.
+
+Claude's Orca route starts the CLI with an actual terminal, a fresh `--session-id`, `--safe-mode`, `--restricted`, and Read/Glob/Grep-only tools. It does not use `-p` or `--no-session-persistence`. The existing Claude login is reused; credentials are not read or copied. The host reads only the matching session transcript under the active Claude configuration directory. The exact initial prompt, session/workspace identity, tool results and completed-turn record must match before a proposal is accepted. `claude-session.json` and the copied `claude-transcript.jsonl` preserve that evidence, independently of `terminal-process.json` and `terminal-retirement.json`. The process group is stopped after collection, on cancellation, or on driver loss. Independent review gets another fresh session, even with the same provider/model.
+
+Headless is an explicit override or a fallback whose pre-launch reason is recorded in `launch.json`. Missing managed ownership or unsupported Claude isolation flags are compatibility reasons; errors after a session launch are not. An initial prompt absent from the transcript after 60 seconds produces a startup diagnostic (check trust/authentication in the terminal), not a second launch. Once the turn is accepted there is no additional wall-clock limit beyond `worker_timeout`. Unknown transcript formats, changed candidates and extra prompts stop adoption. Preserve the interactive task intent and reconcile the original attempt; never remove it just to resend a task. Terminal content and sidebar state alone cannot establish completion.
 
 `init --launcher auto` is the default, including existing configurations without `worker_launcher`. Each driver can override it without changing project configuration:
 

@@ -9,9 +9,34 @@ try:
     VERSION = version("todo-flow")
 except PackageNotFoundError:
     # Copied recovery runners execute with the base interpreter.
-    VERSION = "0.0.8"
+    VERSION = "0.1.1"
 CONTRACTS = json.loads(Path(__file__).with_name("release.json").read_text())
 VERIFICATION_IDENTITY_VERSION = 1
+
+
+def validate_verify_preflight(config):
+    """Return ordered, detached argv arrays; absence preserves existing behavior."""
+    return _validate_verify_checks(config, "verify_preflight")
+
+
+def validate_verify_related(config):
+    """Explicit intermediate checks; an empty list keeps full verification."""
+    return _validate_verify_checks(config, "verify_related")
+
+
+def _validate_verify_checks(config, field):
+    checks = config.get(field, [])
+    if not isinstance(checks, list):
+        raise ValueError(f"{field} must be a JSON array of argv arrays")
+    for argv in checks:
+        if (
+            not isinstance(argv, list)
+            or not argv
+            or any(not isinstance(arg, str) or "\0" in arg for arg in argv)
+            or not argv[0]
+        ):
+            raise ValueError(f"{field} commands must be nonempty argv arrays")
+    return [list(argv) for argv in checks]
 
 
 def validate_verify_identity(config):
@@ -90,6 +115,12 @@ def check_config(config, contracts=CONTRACTS, engine_version=VERSION):
     if release_number(engine_version) < release_number(config.get("min_engine_version", "0.0.1")):
         raise ValueError("Project requires a newer engine")
     validate_verify_identity(config)
+    validate_verify_preflight(config)
+    validate_verify_related(config)
+    if "verify_concurrency" in config:
+        limit = config["verify_concurrency"]
+        if type(limit) is not int or limit < 1:
+            raise ValueError("verify_concurrency must be a positive integer")
     timeout = config.get("worker_timeout")
     if timeout is not None and (type(timeout) is not int or timeout < 0):
         raise ValueError("worker_timeout must be null (unlimited) or nonnegative seconds")
