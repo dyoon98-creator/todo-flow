@@ -706,6 +706,75 @@ for (const [key, [ko, ja, zh]] of Object.entries(deliveryMessages)) {
   koreanMessages[key] = ko;
   additionalMessages[key] = [ja, zh];
 }
+// Opt-in action-required notifications: each entry is [Korean, Japanese, Simplified Chinese].
+const notificationMessages = {
+  "Notifications": ["알림", "通知", "通知"],
+  "Notify me in this browser when this project needs action": [
+    "이 프로젝트에 조치가 필요할 때 이 브라우저에서 알림 받기",
+    "このプロジェクトで対応が必要になったら、このブラウザーで通知する",
+    "当此项目需要处理时，在此浏览器中通知我"
+  ],
+  "Decision requested": ["결정 요청", "判断の依頼", "请求决策"],
+  "Execution needs recovery": ["실행 복구 필요", "実行の復旧が必要", "执行需要恢复"],
+  "Notifications are on for this project. Earlier items will not be repeated.": [
+    "이 프로젝트의 알림을 켰습니다. 이전 항목은 다시 알리지 않습니다.",
+    "このプロジェクトの通知をオンにしました。以前の項目は再通知しません。",
+    "已为此项目开启通知。之前的事项不会重复通知。"
+  ],
+  "Notifications are off for this project.": [
+    "이 프로젝트의 알림을 껐습니다.",
+    "このプロジェクトの通知をオフにしました。",
+    "已关闭此项目的通知。"
+  ],
+  "Browser notifications are unavailable here. The dashboard still shows every item.": [
+    "이 브라우저에서는 알림을 사용할 수 없습니다. 대시보드에는 모든 항목이 그대로 표시됩니다.",
+    "このブラウザーでは通知を利用できません。ダッシュボードにはすべての項目が引き続き表示されます。",
+    "此浏览器无法使用通知。仪表板仍会显示所有事项。"
+  ],
+  "Notification permission was not granted. The dashboard still shows every item.": [
+    "알림 권한이 허용되지 않았습니다. 대시보드에는 모든 항목이 그대로 표시됩니다.",
+    "通知の権限が許可されませんでした。ダッシュボードにはすべての項目が引き続き表示されます。",
+    "未获得通知权限。仪表板仍会显示所有事项。"
+  ],
+  "Notification settings cannot be saved in this browser. The dashboard still shows every item.": [
+    "이 브라우저에 알림 설정을 저장할 수 없습니다. 대시보드에는 모든 항목이 그대로 표시됩니다.",
+    "このブラウザーには通知設定を保存できません。ダッシュボードにはすべての項目が引き続き表示されます。",
+    "无法在此浏览器中保存通知设置。仪表板仍会显示所有事项。"
+  ]
+};
+for (const [key, [ko, ja, zh]] of Object.entries(notificationMessages)) {
+  koreanMessages[key] = ko;
+  additionalMessages[key] = [ja, zh];
+}
+// Authored planning summary and guidance: each entry is [Korean, Japanese, Simplified Chinese].
+const planningMessages = {
+  "Work size": ["작업 규모", "作業規模", "工作规模"],
+  "Implementation recommendation": ["구현 추천", "実装の推奨", "实现建议"],
+  "Not recorded": ["미작성", "未記入", "未填写"],
+  "No worker plan recorded": ["워커 계획 미작성", "ワーカー計画は未記入", "未填写工作进程计划"],
+  "Basis": ["근거", "根拠", "依据"],
+  "This is the authored recommendation, not the worker that ran. trackrun applies the execution mode, explicit role options and project settings first, so the actual choice can differ.": [
+    "작성 시 추천값이며 실제로 실행한 워커가 아닙니다. trackrun은 실행 모드, 명시한 역할 옵션, 프로젝트 설정을 먼저 적용하므로 실제 선택은 다를 수 있습니다.",
+    "作成時の推奨値であり、実際に動作したワーカーではありません。trackrun は実行モード、明示したロールのオプション、プロジェクト設定を先に適用するため、実際の選択は異なる場合があります。",
+    "这是编写时的建议，并非实际运行的工作进程。trackrun 会优先应用执行模式、显式角色选项和项目设置，因此实际选择可能不同。"
+  ],
+  "Work size estimates change scope, verification burden and uncertainty. It is not a duration or price.": [
+    "작업 규모는 변경 범위·검증 부담·불확실성에 대한 추정이며 소요 시간이나 가격이 아닙니다.",
+    "作業規模は変更範囲・検証の負担・不確実性の見積もりであり、所要時間や価格ではありません。",
+    "工作规模是对变更范围、验证负担和不确定性的估计，并非耗时或价格。"
+  ],
+  "Reasoning effort is a per-role model setting, separate from work size. Recommendations weigh complexity, risk, needed roles and user constraints.": [
+    "추론 에포트는 역할별 모델 설정이며 작업 규모와 별개입니다. 추천은 복잡도·위험·필요한 역할·사용자 제약을 기준으로 합니다.",
+    "推論エフォートはロールごとのモデル設定であり、作業規模とは別です。推奨は複雑さ・リスク・必要なロール・ユーザーの制約に基づきます。",
+    "推理强度是按角色设置的模型参数，与工作规模无关。建议依据复杂度、风险、所需角色和用户约束。"
+  ],
+  "Actual runs are recorded in Activity": ["실제 실행 기록은 실행 현황에서 확인", "実際の実行記録は実行状況で確認", "实际运行记录请在活动中查看"],
+  "Selection guide": ["선정 기준", "選定の目安", "选择指南"]
+};
+for (const [key, [ko, ja, zh]] of Object.entries(planningMessages)) {
+  koreanMessages[key] = ko;
+  additionalMessages[key] = [ja, zh];
+}
 const catalogs = {
   en: {},
   ko: koreanMessages,

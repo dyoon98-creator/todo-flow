@@ -2,6 +2,23 @@
 
 User-visible behavior, compatibility, important fixes and repository changes. The first public release is `0.0.1`, distributed through GitHub Releases.
 
+## Unreleased
+
+## 0.1.2 — 2026-10-07
+
+- Show delivery and cleanup progress separately, including deferred or missing cleanup evidence. Add visible track IDs and expandable planning summaries with work estimates and worker recommendations.
+- Notify users when action is required, with localized dashboard notifications.
+- Prefer interactive Claude workers in owned Orca worktrees, preserving read-only tools, session-bound transcript collection and explicit fallback evidence.
+- Add optional verification concurrency limits shared by drivers using the same state, with durable queue and process-cleanup evidence.
+- Add read-only version diagnostics for the engine, PATH commands, project skills, dashboards and a selected release wheel.
+- Compare recorded worker quality and timing only within compatible evidence groups; include synthetic examples without claiming model rankings.
+- Require primary local checkout synchronization before reporting an authorized track run complete.
+- Keep state/configuration formats and worker/skill protocols unchanged.
+
+- Add a tag-only release workflow (`.github/workflows/release.yml`) for future releases. It refuses an existing release, checks that the checked-out commit is the tag commit and that the tag matches the package version, builds into `dist/release`, keeps the source-archive, clean-installation and `SHA256SUMS` checks, attests exactly the wheel and source archive with SLSA build provenance and publishes those same files. Write permissions exist only in the release job; existing releases and files are never replaced.
+- Document consumer verification with `gh attestation verify` pinned to this repository, the release workflow and the release tag ref, plus the approved source commit when specified. `v0.1.1` and earlier releases are unchanged and have no attestations.
+- Add text contract tests for the release workflow triggers, permissions, action pin, attested and uploaded files, immutability and the documented verification policy. Signing and live verification have not yet been exercised on a published release or fixture.
+
 ## 0.1.1 — 2026-10-04
 
 - Distinguish a newly prepared merge from a completed no-op proposal receipt, preserving both merge parents and idempotent retries after restart.
