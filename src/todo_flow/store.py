@@ -27,6 +27,8 @@ class Conflict(RuntimeError):
 class Store:
     def __init__(self, state):
         self.path = Path(state).resolve()
+        if self.path == Path("/Users/dongchanyoon/Documents/Work/Projects/00.NPL_Control_Center/todo").resolve():
+            raise ValueError("LEGACY_CC_STATE_PATH_FORBIDDEN: use --state /Users/dongchanyoon/Library/Application Support/npl-control-center/todo")
         self.path.mkdir(parents=True, exist_ok=True)
         from .file_store import FileDatabase
         from .schema import SCHEMA

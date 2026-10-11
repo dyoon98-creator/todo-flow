@@ -12,6 +12,13 @@ from .maintenance import runtime_guard
 from .store import Conflict, Store, encode, fingerprint
 
 
+def default_state(repo):
+    root = Path(repo).resolve()
+    if root == Path("/Users/dongchanyoon/Documents/Work/Projects/00.NPL_Control_Center").resolve():
+        return Path('/Users/dongchanyoon/Library/Application Support/npl-control-center/todo')
+    return root / "todo"
+
+
 def initialize(args):
     repo = Path(args.repo).resolve()
     command(["git", "rev-parse", "--verify", "HEAD"], repo)
@@ -54,7 +61,7 @@ def initialize(args):
     if args.verify_concurrency is not None:
         config["verify_concurrency"] = args.verify_concurrency
     check_config(config)
-    store = Store(args.state or repo / "todo")
+    store = Store(args.state or default_state(repo))
     store.configure(config)
     print(encode({"state": str(store.path), "config": config}))
 
@@ -299,11 +306,11 @@ def dispatch(args):
 
             print(
                 encode(
-                    worker_stop_summary(args.state or Path.cwd() / "todo", args.track, args.attempt)
+                    worker_stop_summary(args.state or default_state(Path.cwd()), args.track, args.attempt)
                 )
             )
             return
-        store = Store(args.state or Path.cwd() / "todo")
+        store = Store(args.state or default_state(Path.cwd()))
         store.config()
         result = None
         if args.command == "register":
@@ -522,7 +529,7 @@ def skill_context(args):
         project = (
             target.parent.parent if target.parent.name in (".agents", ".claude") else Path.cwd()
         )
-        state = (project / "todo").resolve()
+        state = default_state(project)
     config_file = state / "config/1.json"
     config = Store(state).config() if config_file.exists() else None
     requested = getattr(args, "language", None)
@@ -574,7 +581,7 @@ def main(argv=None):
             return
         state = Path(
             args.state
-            or (Path(args.repo) / "todo" if args.command == "init" else Path.cwd() / "todo")
+            or (default_state(args.repo) if args.command == "init" else default_state(Path.cwd()))
         ).resolve()
         with runtime_guard(state):
             if args.command == "compatibility":
