@@ -8,7 +8,7 @@ Turn selected TODOs into parallel work, independent reviews and verified deliver
 
 [Installation](AGENT_INSTALL.md) · [Operations](OPERATIONS.md) · [Updates](UPDATES.md) · [Demo](DEMO.md)
 
-[Get started](#quick-start) · [See it in action](#see-it-in-action) · [For agents](#for-agents) · [Operations](OPERATIONS.md)
+[Get started](#quick-start) · [Use skills](#use-skills) · [See it in action](#see-it-in-action) · [For agents](#for-agents) · [Operations](OPERATIONS.md)
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-257854)](LICENSE) [![Status: development](https://img.shields.io/badge/status-development-d4a34b)](#current-scope) [![Python: 3.11+](https://img.shields.io/badge/python-3.11%2B-3776ab)](pyproject.toml)
 
@@ -19,10 +19,94 @@ Turn selected TODOs into parallel work, independent reviews and verified deliver
   <a href="https://gitreels.com/JakeB-5/todo-flow"><img src="https://gitreels.com/JakeB-5/todo-flow.webp" alt="TODO Flow in 15 seconds" width="100%"></a>
   <br>
   <a href="https://gitreels.com"><img src="https://gitreels.com/badge.svg" alt="Made with GitReels" height="24"></a>
+  <a href="https://gitreels.com/JakeB-5/todo-flow"><img src="https://gitreels.com/api/badges/rotw/JakeB-5/todo-flow.svg" alt="Reel of the Week #1 on GitReels" height="24"></a>
 </p>
 <!-- gitreels:end -->
 
 *A 15-second overview generated from the README by GitReels.*
+
+## Quick start
+
+Choose **English (`en`), Korean (`ko`), Japanese (`ja`) or Simplified Chinese (`zh-CN`) during project setup**. This sets the project's default dashboard language and the language requested from agents for reports and new track documents. Skill instructions remain English. The dashboard also has an English / 한국어 / 日本語 / 简体中文 switch for your personal display preference.
+
+### Let your agent set it up
+
+Paste this into your coding-agent chat, replacing the project path:
+
+```text
+Install TODO Flow in /absolute/my-project following
+https://github.com/JakeB-5/todo-flow/blob/main/AGENT_INSTALL.md.
+Ask me to choose en, ko, ja or zh-CN if I have not specified a language.
+Install the skills for the agent I am using and verify the CLI, dashboard
+and skill discovery. Report the result; I will register my first TODO next.
+```
+
+[For agents](#for-agents) explains the installation contract.
+
+<details>
+<summary>Install manually</summary>
+
+### Install manually
+
+Prerequisites: **Python 3.11+, uv, Git, and an authenticated Claude or Codex CLI**. GitHub issues and PRs additionally need authenticated `gh`. Install the published release:
+
+```sh
+uv tool install https://github.com/JakeB-5/todo-flow/releases/download/v0.1.2/todo_flow-0.1.2-py3-none-any.whl
+todo-flow --version
+```
+
+[Release assets and checksums](https://github.com/JakeB-5/todo-flow/releases/tag/v0.1.2). This installs the CLI and bundled dashboard/skills; no checkout is needed. For source development, clone this repository and use `uv sync --frozen` and `uv tool install .`.
+
+In the **target project**, use its real verification command, base branch and relevant file patterns. This example assumes an existing Python project with a test suite, an initial Git commit and an `origin` remote:
+
+```sh
+cd /absolute/my-project
+todo-flow init --repo . --base main --worker codex \
+  --language en \
+  --verify '["python3","-m","unittest","discover","-v"]' \
+  --write 'src/*.py' --write 'tests/*.py' \
+  --context 'src/*.py' --context 'tests/*.py' --context README.md
+
+todo-flow install-skills --target .agents/skills
+todo-flow serve --port 8765
+```
+
+Use `--language ko`, `--language ja` or `--language zh-CN` for the other supported languages. Omitting it prompts in an interactive terminal and defaults to English without a terminal. For Claude sessions, install to `.claude/skills`. Skills inherit the configured language. Add `--github OWNER/REPOSITORY` to `init` for GitHub issues and PRs.
+
+Codex workers use the read-only sandbox by default. To let a worker run project tests and verification commands, set the stored project option with `init --codex-sandbox workspace-write`. The worker still returns product edits as proposals for the host to apply. An inherited `TODO_FLOW_CODEX_SANDBOX` environment value cannot change the stored permission.
+
+Keep the dashboard server running and open **http://127.0.0.1:8765**. Continue with the skill examples below. [Detailed setup and recovery](AGENT_INSTALL.md).
+
+</details>
+
+<a id="use-skills"></a>
+
+### From the first TODO to a result
+
+Open your **target project** in the agent after installation. Enter the examples below in the **agent's chat input**. [Codex](https://developers.openai.com/plugins/build/skills) uses `$skill-name`; [Claude Code](https://code.claude.com/docs/en/skills) uses `/skill-name`. These are chat requests, not shell commands.
+
+| Purpose | Codex | Claude Code |
+|---|---|---|
+| Investigate and register a plan; no execution | `$todo REQUIREMENT` | `/todo REQUIREMENT` |
+| Recommend tracks to select; no execution | `$track-picks` | `/track-picks` |
+| Execute the track IDs you selected | `$trackrun TRACK_ID` | `/trackrun TRACK_ID` |
+| Reassess conditional observations | `$watchlist` | `/watchlist` |
+
+1. **Register:** send `$todo Add bounded retries for temporary network failures, with tests.` in Codex, or `/todo Add bounded retries for temporary network failures, with tests.` in Claude Code. You receive a track ID and a reviewable HTML plan.
+2. **Review and select:** open the returned document link or the dashboard at **http://127.0.0.1:8765**. Check the scope and acceptance conditions ([example plan](examples/retry-backoff.html)), then choose a track yourself or request `$track-picks` / `/track-picks` for recommendations.
+3. **Run:** send `$trackrun TRACK_ID` / `/trackrun TRACK_ID` with the actual selected ID. Multiple IDs are supported. Watch progress and respond to decision requests in the dashboard.
+
+Alternatively, run the installed command in a **terminal in the target project** instead of sending the chat execution request:
+
+```sh
+trackrun TRACK_ID
+```
+
+`REQUIREMENT` and `TRACK_ID` are placeholders. Plain-language requests such as “use the todo skill to register this requirement” also name the skill explicitly. `trackpicks` elsewhere in this guide is a conversational shorthand; the installed skill name is `track-picks`.
+
+If a skill is missing, check that it was installed in `.agents/skills` for Codex or `.claude/skills` for Claude Code, then reopen the agent session in that project. If you installed an alias, use that name (for example, `$flow-todo` / `/flow-todo`).
+
+The default endpoint is **`review`**, which preserves a reviewed candidate. To authorize automatic landing during initialization, add **`--endpoint land --allow-land`**. After landing, triage handles original-scope repairs, separate follow-ups and conditional watches. New follow-up TODOs await your selection.
 
 ## Development activity, up to 33×.
 
@@ -77,52 +161,7 @@ The tour shows a dense, continuous TODO list, selection for `trackrun`, current 
 
 Useful for a backlog of independent changes, work that spans sessions, and reviewing several candidate changes before integration. On the development branch, workers receive workspace and evidence paths, then search and read relevant files themselves. See [current scope](#current-scope) for release availability and remaining boundaries.
 
-## Quick start
-
-Choose **English (`en`), Korean (`ko`), Japanese (`ja`) or Simplified Chinese (`zh-CN`) during project setup**. This sets the project's default dashboard language and the language requested from agents for reports and new track documents. Skill instructions remain English. The dashboard also has an English / 한국어 / 日本語 / 简体中文 switch for your personal display preference.
-
-### Let your agent set it up
-
-Paste this into your coding-agent session, filling in the project and first task:
-
-```text
-Install TODO Flow in /absolute/my-project following
-https://github.com/JakeB-5/todo-flow/blob/main/AGENT_INSTALL.md. Ask me to choose en, ko, ja or zh-CN if I have not specified it.
-My first task is: [the change and expected result].
-Register a reviewable HTML TODO and show me its link. Select and run the
-track that covers this request, then report the actual result and next steps.
-```
-
-[For agents](#for-agents) explains the installation contract. Setup-only requests stop after setup; the prompt above also requests the first run.
-
-### Install manually
-
-Prerequisites: **Python 3.11+, uv, Git, and an authenticated Claude or Codex CLI**. GitHub issues and PRs additionally need authenticated `gh`. Install the published release:
-
-```sh
-uv tool install https://github.com/JakeB-5/todo-flow/releases/download/v0.1.2/todo_flow-0.1.2-py3-none-any.whl
-todo-flow --version
-```
-
-[Release assets and checksums](https://github.com/JakeB-5/todo-flow/releases/tag/v0.1.2). This installs the CLI and bundled dashboard/skills; no checkout is needed. For source development, clone this repository and use `uv sync --frozen` and `uv tool install .`.
-
-In the **target project**, use its real verification command, base branch and relevant file patterns. This example assumes an existing Python project with a test suite, an initial Git commit and an `origin` remote:
-
-```sh
-cd /absolute/my-project
-todo-flow init --repo . --base main --worker codex \
-  --language en \
-  --verify '["python3","-m","unittest","discover","-v"]' \
-  --write 'src/*.py' --write 'tests/*.py' \
-  --context 'src/*.py' --context 'tests/*.py' --context README.md
-
-todo-flow install-skills --target .agents/skills
-todo-flow serve --port 8765
-```
-
-Use `--language ko`, `--language ja` or `--language zh-CN` for the other supported languages. Omitting it prompts in an interactive terminal and defaults to English without a terminal. For Claude sessions, install to `.claude/skills`. Skills inherit the configured language. Add `--github OWNER/REPOSITORY` to `init` for GitHub issues and PRs.
-
-Open **http://127.0.0.1:8765**. Ask your agent to use the installed todo skill, review the generated document, then select and run its actual ID. Setup is complete when the dashboard opens, the registered document renders and the requested first run reaches its configured endpoint. [Detailed setup and recovery](AGENT_INSTALL.md).
+## Advanced configuration
 
 ### Coexist with another workflow
 
@@ -165,6 +204,35 @@ For an explicitly bounded request, use `trackrun TRACK_ID --worker-attempt-limit
 Assessment, implementation, independent review, triage and watch attempts reserve one attempt atomically at claim time. Failed or interrupted attempts remain charged, including failures before worker launch. Host verification, landing and completion tasks do not consume worker attempts. Files in `budgets/` preserve the limit and cumulative usage; `status`, driver output, decisions and budget events expose usage, candidate HEAD and remaining tasks. A budget stop preserves results and pending obligations and does not mean the goal is complete.
 
 Resume a budget stop with `todo-flow --state STATE answer DECISION_ID --text 'Approve additional attempts' --additional-worker-attempts 5`, then restart `todo-flow --state STATE run` if needed. The positive increment extends the existing total limit without clearing usage or replacing pending work. A plain answer, `pause`/`resume`, or repeating `start`/`trackrun` cannot grant extra attempts. Use the CLI for budget approval; ordinary dashboard answers remain available for other decisions.
+
+### Necessity-based verification for this repository
+
+`scripts/verify_selected.py --plans /absolute/path/plans.json` is a project verifier
+that runs only checks judged necessary before execution. The coordinator assesses
+the change and existing evidence; this script does not infer necessity from file names.
+The plan file has `version: 1` and a `plans` object keyed by `git rev-parse HEAD^{tree}`.
+Each plan has a `reason` explaining its scope/evidence and a nonempty `checks` array:
+
+```json
+{
+  "name": "focused behavior check",
+  "decision": "necessary",
+  "reason": "The changed selector must not launch omitted commands",
+  "evidence_gap": "Source inspection alone does not demonstrate the launch boundary",
+  "argv": ["uv", "run", "--frozen", "python", "-m", "unittest", "discover", "-s", "tests", "-p", "test_verify_selected.py"]
+}
+```
+
+An omitted check instead uses `decision: "unnecessary"` or `"undetermined"`, plus
+`name` and `reason`; it never executes. Missing, stale or malformed plans execute
+no checks. Undetermined necessity reports `inconclusive`, without a whole-suite
+fallback. Explicitly unnecessary checks remain omissions, not test passes. A plan
+may require no executable checks after direct review, but must record why.
+Have independent review assess these choices alongside the change. Declare the
+plan file and runner in `--verify-identity` so changed decisions invalidate cached
+evidence. Leave `verify_preflight` and `verify_related` unset when adopting this
+policy; otherwise those commands run outside this selector. Existing state needs
+a quiescent configuration migration, not reinitialization. CI policy is separate.
 
 ### Run optional verification preflight checks
 
@@ -227,33 +295,6 @@ This is an argument, not a standalone command. `version` must be `1`; `files` co
 A different `nonce` invalidates prior identity evidence. Use a non-secret label: configuration stores it as text, while identity evidence stores its digest. **Existing configuration is immutable through `Store.configure`, and there is no configuration-update CLI.** Choose the declaration and nonce when initializing new state. Repeating `init` cannot rotate an existing nonce; do not edit or delete canonical state to bypass this restriction. Existing state needs a separately supported configuration migration to change its declaration. An intentional content change to an already declared external input also invalidates its previous identity.
 
 Cache reuse additionally requires the same HEAD, tree, command, timeout and a clean checkout. Legacy success without identity requires fresh verification; unknown identity versions are rejected. File content, resolved paths and metadata are observed before and after execution. This detects ordinary changes, including ordinary change-and-restore writes with changed metadata, but does not execute an immutable snapshot or defend against privileged metadata manipulation. Undeclared files, transitive dependencies, environment variables and remote services are not inferred. See the [self-hosting declaration and operating limits](examples/self-hosting/README.md#declare-verification-inputs-with-a-supporting-engine) for the external runner example.
-
-## From the first TODO to a result
-
-In your agent session:
-
-```text
-todo Add bounded retries for temporary network failures, with tests.
-todo Show a useful error when a request cannot be retried.
-trackpicks
-```
-
-The agent searches existing files for overlap and registers HTML plans. Review them in the dashboard. Pick tracks there and copy the command, or use the recommendations from `trackpicks`:
-
-```sh
-trackrun retry-backoff request-error-message
-```
-
-*These are example IDs; use the IDs returned by your own registration.* `todo` and `trackpicks` are agent skill requests; `trackrun` is also an installed terminal command.
-
-| Step | What you can inspect |
-|---|---|
-| Register and review | The HTML plan, scope, evidence and acceptance conditions. [Example](examples/retry-backoff.html) |
-| Select and execute | Selected IDs, separate worktrees, current workers and questions. |
-| Verify and review | Verification output and independent review tied to the exact candidate. |
-| Land and triage | With an authorized landing endpoint: integrated SHA, finding dispositions, issue closure and completion. |
-
-The default endpoint is **`review`**, which preserves a reviewed candidate. To authorize automatic landing during initialization, add **`--endpoint land --allow-land`**. After landing, triage handles original-scope repairs, separate follow-ups and conditional watches. New follow-up TODOs await your selection.
 
 ## For agents
 
@@ -342,7 +383,7 @@ Completed tracks automatically clean disposable checkouts and unchanged worker t
 
 Latest release: **0.1.2**. Small-project full cycles, recovery and two–three independent concurrent tracks have been exercised; large lists have separate synthetic UI coverage.
 
-- One repository per project state. Forgejo, submodules and coordinated multi-repository landing are not implemented.
+- A project can configure multiple distinct Git roots with `repos`. The host creates a separate worktree per root; command workers return changes as `repository-name:relative/path`. See the [Codex exec example adapter](examples/codex_exec_adapter.py). Forgejo and submodules are not implemented.
 - Development workers explore the checkout with read-only tools and return JSON proposals. The runtime applies changes, verifies and publishes. Browser workflows are not implemented.
 - Source contents and full evidence are not injected into the prompt; there is no aggregate 150,000-byte source limit on `main`. Provider context limits still apply to what a worker chooses to read. File deletion and binary edits are not supported.
 - Workers have no default time limit. `init --worker-timeout SECONDS` opts into one; existing projects retain their configured limit (`worker_timeout: null` disables it). Cancellation and driver-loss cleanup remain active. Default driver task-assignment limit: 100; remaining requests survive for the next run.
